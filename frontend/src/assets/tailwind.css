@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base typography and elements */
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-800;
+  }
+
+  h1 { @apply text-2xl sm:text-3xl font-bold tracking-tight text-slate-900; }
+  h2 { @apply text-xl sm:text-2xl font-bold tracking-tight text-slate-900; }
+  h3 { @apply text-lg sm:text-xl font-semibold tracking-tight text-slate-900; }
+
+  a { @apply text-brand-600 hover:text-brand-700 underline-offset-4 hover:underline; }
+}
+
+/* Reusable components */
+@layer components {
+  .container-app {
+    @apply max-w-6xl mx-auto px-4 sm:px-6;
+  }
+
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-all duration-200;
+  }
+  .btn-primary {
+    @apply btn border-transparent bg-brand-600 text-white hover:bg-brand-700 shadow-sm hover:shadow-md;
+  }
+  .btn-outline {
+    @apply btn border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-400 shadow-sm;
+  }
+  .btn-ghost {
+    @apply btn border-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-800;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm placeholder:text-slate-400
+           focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all;
+  }
+
+  .select {
+    @apply rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm
+           focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all;
+  }
+
+  .table {
+    @apply min-w-full text-sm;
+  }
+  .thead {
+    @apply bg-slate-50 text-slate-600 font-semibold;
+  }
+  .th {
+    @apply text-left font-semibold p-4;
+  }
+  .td {
+    @apply p-4 align-middle;
+  }
+  .tr-hover {
+    @apply hover:bg-slate-50 transition-colors duration-150;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full bg-brand-50 text-brand-700 px-3 py-1 text-xs font-medium;
+  }
+
+  .pagination-btn {
+    @apply rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium
+           hover:bg-slate-50 hover:border-slate-400 transition-all shadow-sm;
+  }
+  .pagination-btn:disabled {
+    @apply opacity-50 cursor-not-allowed hover:bg-white;
+  }
+  .pagination-btn.active {
+    @apply bg-brand-600 text-white border-brand-600 hover:bg-brand-700;
+  }
+}
+
+/* Utilities */
+@layer utilities {
+  .bg-grid {
+    background-image: radial-gradient(rgba(2, 6, 23, 0.03) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  
+  .text-success {
+    @apply text-green-600;
+  }
+  
+  .text-danger {
+    @apply text-red-600;
+  }
+  
+  .text-warning {
+    @apply text-amber-600;
+  }
+}

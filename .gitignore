@@ -1,0 +1,105 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.log
+*.orig
+*.bak
+*.local
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# Node / frontend (Vite + Vue + Tailwind)
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.vite-cache/
+frontend/.eslintcache
+frontend/.cache/
+frontend/coverage/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Go / backend
+backend/bin/
+backend/build/
+backend/dist/
+backend/coverage/
+backend/.cache/
+backend/.air.toml
+backend/tmp/
+backend/*.out
+backend/*.test
+backend/cover.*
+# Go build artifacts (repo-wide)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go module/cache (keep go.mod/go.sum tracked)
+.gocache/
+
+# DB migrations temp files (keep .sql tracked)
+backend/db/migrations/*.tmp
+backend/db/migrations/*.bak
+backend/db/migrations/*-journal
+
+# Docker
+docker-data/
+docker-volume/
+*.pid
+*.pid.lock
+# Compose override files
+docker-compose.override.yml
+docker-compose.*.yml
+# Local docker env files
+.docker/
+.env.docker
+.env.compose
+
+# Environment files (share only examples)
+.env
+.env.*.local
+!.env.example
+
+# Local artifacts/doc dumps (may contain challenge text)
+repo-to-text_*.txt
+
+# Logs
+logs/
+*.log
+log/
+pids/
+*.pid
+*.seed
+*.coverprofile
+
+# Coverage profiles
+coverage.out
+coverage/
+.cov/
+*.lcov
+
+# Misc caches
+.cache/
+.tmp/
+.tmp-*/
+**/.turbo/
+**/.parcel-cache/

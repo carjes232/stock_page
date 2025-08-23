@@ -1,0 +1,51 @@
+services:
+  db:
+    image: cockroachdb/cockroach:v24.1.2
+    command: start-single-node --insecure --http-addr=0.0.0.0:8081 --sql-addr=0.0.0.0:26259
+    ports:
+      - "26258:26259"
+      - "8082:8081"
+    volumes:
+      - crdb-data:/cockroach/cockroach-data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/health?ready=1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DB_URL
+      - API_BASE
+      - API_TOKEN
+      - BACKEND_PORT
+      - INGEST_INTERVAL
+      - INGEST_ON_START
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT}:8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: "${VITE_API_BASE}"
+        VITE_PORT: "${FRONTEND_PORT}"
+    environment:
+      - FRONTEND_PORT
+      - VITE_API_BASE
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT}:${FRONTEND_PORT}"
+    restart: unless-stopped
+
+volumes:
+  crdb-data:
