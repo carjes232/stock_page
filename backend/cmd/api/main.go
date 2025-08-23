@@ -12,6 +12,7 @@ import (
 	"stockchallenge/backend/internal/config"
 	"stockchallenge/backend/internal/db"
 	"stockchallenge/backend/internal/ingest"
+	"stockchallenge/backend/internal/marketdata"
 	"stockchallenge/backend/internal/rec"
 
 	"github.com/joho/godotenv"
@@ -51,6 +52,14 @@ func main() {
 	// Services
 	ing := ingest.NewService(cfg.APIBase, cfg.APIToken, pool, sugar)
 	recommender := rec.NewService(pool)
+	// Wire optional price provider if configured
+	if cfg.FMPAPIKey != "" {
+		pp := marketdata.NewFMPClient(cfg.FMPAPIKey)
+		recommender.SetPriceProvider(pp)
+	}
+	// Enable quote cache and top-K enrichment
+	recommender.EnableQuoteCache(cfg.QuotesTTL)
+	recommender.SetTopK(cfg.PriceTopK)
 
 	// Optionally run ingestion on start
 	if cfg.IngestOnStart {

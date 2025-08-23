@@ -20,7 +20,3 @@ CREATE INDEX IF NOT EXISTS idx_stocks_ticker ON stocks (ticker);
 CREATE INDEX IF NOT EXISTS idx_stocks_updated_at ON stocks (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stocks_price_target_delta ON stocks (price_target_delta DESC);
 
--- Trigger to auto-update updated_at (CRDB uses ON UPDATE not supported; emulate via column default in UPSERTs)
--- We will set updated_at manually in queries.
-
--- Optional: recommendations view (computed on query instead in app)

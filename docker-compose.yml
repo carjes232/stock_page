@@ -21,6 +21,9 @@ services:
       - DB_URL
       - API_BASE
       - API_TOKEN
+      - FMP_API_KEY
+      - PRICE_TOPK
+      - QUOTES_TTL
       - BACKEND_PORT
       - INGEST_INTERVAL
       - INGEST_ON_START

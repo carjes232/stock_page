@@ -30,6 +30,9 @@ Default ports
 Environment variables (.env)
 - API_BASE=
 - API_TOKEN=<paste raw token here>  # the app adds the Bearer prefix
+- FMP_API_KEY=<optional key for current prices via Financial Modeling Prep>
+- PRICE_TOPK=20        # enrich quotes only for top-K before final ranking
+- QUOTES_TTL=10m       # cache quote snapshots to stay within free limits
 - DB_URL=postgresql://root@db:26259/stocks?sslmode=disable
 - INGEST_INTERVAL=15m
 - BACKEND_PORT=8080
@@ -49,6 +52,7 @@ Development workflow
   - GET /api/stocks/sort?field=<whitelisted>&order=ASC|DESC&page=<n>&limit=<n>
   - POST /api/admin/ingest  (manual ingestion)
   - GET /api/recommendations
+    - If `FMP_API_KEY` is set, recommendations include `current_price` and `percent_upside` and factor relative upside into the score.
 - The frontend calls the backend via /api (proxy configured by Vite dev server to http://backend:8080 inside compose or localhost:8080 on host)
 
 Project structure
