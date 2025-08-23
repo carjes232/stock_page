@@ -15,8 +15,10 @@ type Config struct {
     IngestInterval time.Duration
     IngestOnStart  bool
     FMPAPIKey      string
-    QuotesTTL      time.Duration
-    PriceTopK      int
+    QuotesTTL         time.Duration
+    PriceTopK         int
+    FundamentalsTTL   time.Duration
+    PriceWarmInterval time.Duration
 }
 
 func getenv(key, def string) string {
@@ -52,6 +54,20 @@ func Load() (*Config, error) {
         topK = 20
     }
 
+    // Fundamentals cache TTL (default 30d)
+    fundTTLStr := getenv("FUNDAMENTALS_TTL", "720h") // 30d
+    fundTTL, err := time.ParseDuration(fundTTLStr)
+    if err != nil {
+        return nil, fmt.Errorf("invalid FUNDAMENTALS_TTL: %w", err)
+    }
+
+    // How often to proactively warm top-K quotes/fundamentals (default daily)
+    warmStr := getenv("PRICE_WARM_INTERVAL", "24h")
+    warmEvery, err := time.ParseDuration(warmStr)
+    if err != nil {
+        return nil, fmt.Errorf("invalid PRICE_WARM_INTERVAL: %w", err)
+    }
+
 	intervalStr := getenv("INGEST_INTERVAL", "15m")
 	interval, err := time.ParseDuration(intervalStr)
 	if err != nil {
@@ -70,5 +86,7 @@ func Load() (*Config, error) {
         FMPAPIKey:      fmpAPIKey,
         QuotesTTL:      quotesTTL,
         PriceTopK:      topK,
+        FundamentalsTTL: fundTTL,
+        PriceWarmInterval: warmEvery,
     }, nil
 }

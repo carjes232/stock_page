@@ -87,6 +87,44 @@
               </div>
             </div>
             
+            <div class="card rounded-xl p-6">
+              <h3 class="font-bold text-slate-800 mb-4">Current Price & Upside</h3>
+              <div class="space-y-3">
+                <div class="flex justify-between items-center">
+                  <span class="text-slate-600">Current Price</span>
+                  <span class="font-medium text-slate-900">{{ money(item.current_price) }}</span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span class="text-slate-600">Percent Upside</span>
+                  <span :class="item.percent_upside != null && item.percent_upside >= 0 ? 'text-success font-medium' : 'text-danger font-medium'">
+                    {{ percent(item.percent_upside) }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card rounded-xl p-6">
+              <h3 class="font-bold text-slate-800 mb-4">Fundamentals</h3>
+              <div class="space-y-3">
+                <div class="flex justify-between items-center">
+                  <span class="text-slate-600">EPS (TTM)</span>
+                  <span class="font-medium text-slate-900">{{ money(item.eps) }}</span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span class="text-slate-600">Growth</span>
+                  <span class="font-medium text-slate-900">{{ percent(item.growth) }}</span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span class="text-slate-600">Intrinsic Value</span>
+                  <span class="font-medium text-slate-900">{{ money(item.intrinsic_value) }}</span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span class="text-slate-600">Intrinsic Value (AAA)</span>
+                  <span class="font-medium text-slate-900">{{ money(item.intrinsic_value_2) }}</span>
+                </div>
+              </div>
+            </div>
+
             <div class="card rounded-xl p-6 lg:col-span-2">
                <h3 class="font-bold text-slate-800 mb-4">Price Delta</h3>
                <div class="text-4xl font-bold text-center" :class="deltaClass(item.price_target_delta)">
@@ -141,4 +179,9 @@ async function load() {
 
 onMounted(load);
 watch(() => route.params.ticker, load);
+
+function percent(v?: number | null): string {
+  if (v == null) return '-';
+  return `${(v * 100).toFixed(1)}%`;
+}
 </script>

@@ -46,6 +46,12 @@
                   <span v-if="rec.price_target_delta != null" :class="deltaClass(rec.price_target_delta)">
                     · Δ ${{ rec.price_target_delta?.toFixed(2) }}
                   </span>
+                  <span v-if="rec.current_price != null" class="ml-1">· Price {{ money(rec.current_price) }}</span>
+                  <span v-if="rec.percent_upside != null" :class="rec.percent_upside >= 0 ? 'text-success' : 'text-danger'">
+                    · ↑ {{ percent(rec.percent_upside) }}
+                  </span>
+                  <span v-if="rec.eps != null"> · EPS {{ money(rec.eps) }}</span>
+                  <span v-if="rec.intrinsic_value != null"> · IV {{ money(rec.intrinsic_value) }}</span>
                 </div>
                 <div class="text-xs text-slate-500 mt-1" v-if="rec.reasons?.length">
                   Reasons: {{ rec.reasons.join(', ') }}
@@ -78,6 +84,16 @@ const error = computed(() => recommendations.value.error);
 function deltaClass(v?: number | null) {
   if (v == null) return '';
   return v >= 0 ? 'text-success' : 'text-danger';
+}
+
+function money(v?: number | null): string {
+  if (v == null) return '-';
+  return `$${v.toFixed(2)}`;
+}
+
+function percent(v?: number | null): string {
+  if (v == null) return '-';
+  return `${(v * 100).toFixed(1)}%`;
 }
 
 function formatDate(dateString: string): string {

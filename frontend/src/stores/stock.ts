@@ -12,6 +12,12 @@ export type StockItem = {
   target_from?: number | null;
   target_to?: number | null;
   price_target_delta?: number | null;
+  current_price?: number | null;
+  percent_upside?: number | null;
+  eps?: number | null;
+  growth?: number | null;
+  intrinsic_value?: number | null;
+  intrinsic_value_2?: number | null;
   updated_at: string;
 };
 
@@ -24,6 +30,12 @@ export type RecItem = {
   target_from?: number | null;
   target_to?: number | null;
   price_target_delta?: number | null;
+  current_price?: number | null;
+  percent_upside?: number | null;
+  eps?: number | null;
+  growth?: number | null;
+  intrinsic_value?: number | null;
+  intrinsic_value_2?: number | null;
   score: number;
   reasons: string[];
   updated_at: string;

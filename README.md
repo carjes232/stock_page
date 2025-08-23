@@ -53,6 +53,7 @@ Development workflow
   - POST /api/admin/ingest  (manual ingestion)
   - GET /api/recommendations
     - If `FMP_API_KEY` is set, recommendations include `current_price` and `percent_upside` and factor relative upside into the score.
+    - If fundamentals are present in the DB, recommendations include `eps` and a simple `intrinsic_value` (15× EPS heuristic).
 - The frontend calls the backend via /api (proxy configured by Vite dev server to http://backend:8080 inside compose or localhost:8080 on host)
 
 Project structure

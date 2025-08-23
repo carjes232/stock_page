@@ -52,16 +52,21 @@ func main() {
 	// Services
 	ing := ingest.NewService(cfg.APIBase, cfg.APIToken, pool, sugar)
 	recommender := rec.NewService(pool)
+	fredClient := marketdata.NewFredClient()
+	recommender.SetCorporateBondYieldProvider(fredClient)
 	// Wire optional price provider if configured
 	if cfg.FMPAPIKey != "" {
 		pp := marketdata.NewFMPClient(cfg.FMPAPIKey)
 		recommender.SetPriceProvider(pp)
+		recommender.SetGrahamValuationProvider(pp)
 	}
 	// Enable quote cache and top-K enrichment
 	recommender.EnableQuoteCache(cfg.QuotesTTL)
-	recommender.SetTopK(cfg.PriceTopK)
+    recommender.EnableGrahamValuation(cfg.FundamentalsTTL)
+    recommender.SetTopK(cfg.PriceTopK)
 
-	// Optionally run ingestion on start
+
+    // Optionally run ingestion on start
 	if cfg.IngestOnStart {
 		go func() {
 			if err := ing.RunOnce(context.Background()); err != nil {
@@ -70,9 +75,36 @@ func main() {
 		}()
 	}
 
-	// Start cron
-	cronStop := make(chan struct{})
-	go ingest.StartCron(ing, cfg.IngestInterval, sugar, cronStop)
+    // Start ingestion cron
+    cronStop := make(chan struct{})
+    go ingest.StartCron(ing, cfg.IngestInterval, sugar, cronStop)
+
+    // Start daily warm cron to prefetch quotes and fundamentals for top-K
+    warmStop := make(chan struct{})
+    go func() {
+        t := time.NewTicker(cfg.PriceWarmInterval)
+        defer t.Stop()
+        for {
+            // Do an initial warm immediately at startup
+            ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+            _ = recommender.WarmCachesForTopK(ctx)
+            cancel()
+            break
+        }
+        for {
+            select {
+            case <-t.C:
+                ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+                if err := recommender.WarmCachesForTopK(ctx); err != nil {
+                    sugar.Warnf("warm caches error: %v", err)
+                }
+                cancel()
+            case <-warmStop:
+                sugar.Infof("warm cron stopped")
+                return
+            }
+        }
+    }()
 
 	// HTTP router
 	router := api.NewRouter(pool, ing, recommender, sugar)
@@ -89,7 +121,8 @@ func main() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt)
 		<-c
-		close(cronStop)
+        close(cronStop)
+        close(warmStop)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)

@@ -140,6 +140,11 @@ FROM stocks WHERE ticker = $1
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	// Optional enrichment (current price, percent upside, eps, intrinsic)
+	var currPrice, pctUpside, eps, growth, intrinsic, intrinsic2 *float64
+	if h.Recommender != nil {
+		currPrice, pctUpside, eps, growth, intrinsic, intrinsic2 = h.Recommender.EnrichTicker(c, ticker, targetTo)
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"id":                    id,
 		"ticker":                ticker,
@@ -152,6 +157,12 @@ FROM stocks WHERE ticker = $1
 		"target_to":             targetTo,
 		"last_rating_change_at": lastChange,
 		"price_target_delta":    priceDelta,
+		"current_price":         currPrice,
+		"percent_upside":        pctUpside,
+		"eps":                   eps,
+		"growth":                growth,
+		"intrinsic_value":       intrinsic,
+		"intrinsic_value_2":     intrinsic2,
 		"created_at":            createdAt,
 		"updated_at":            updatedAt,
 	})
