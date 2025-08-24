@@ -11,9 +11,11 @@ import (
     "time"
 )
 
-// PriceProvider defines the minimal interface rec.Service needs for quotes.
+// Deprecated: Go no longer uses direct external price providers. Quotes are
+// supplied via the quotes_cache table by the Python fundamentals service.
+// Left for backward compatibility.
 type PriceProvider interface {
-	Quote(ctx context.Context, symbol string) (float64, error)
+    Quote(ctx context.Context, symbol string) (float64, error)
 }
 
 // GrahamValuationProvider defines the minimal interface for fetching data for a Graham valuation.

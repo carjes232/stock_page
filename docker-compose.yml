@@ -22,6 +22,8 @@ services:
       - API_BASE
       - API_TOKEN
       - FMP_API_KEY
+      - DISABLE_GRAHAM_PROVIDER
+      - FUNDAMENTALS_API_BASE
       - PRICE_TOPK
       - QUOTES_TTL
       - BACKEND_PORT
@@ -32,6 +34,46 @@ services:
         condition: service_healthy
     ports:
       - "${BACKEND_PORT}:8080"
+    restart: unless-stopped
+
+  fundamentals-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.python
+    command: ["python", "fundamentals_api.py"]
+    environment:
+      - DB_URL
+      - ALPHAVANTAGE_KEY
+      - PORT=9000
+    volumes:
+      - ./backend:/app:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+
+  fundamentals-scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.python
+    command: ["python", "scheduler.py"]
+    environment:
+      - FUNDAMENTALS_API_BASE=http://fundamentals-api:9000
+      - FUNDAMENTALS_SYMBOLS
+      - FUNDAMENTALS_USE_FINAL_METRIC
+      - PRICE_UPDATE_INTERVAL
+      - FUNDAMENTALS_UPDATE_INTERVAL
+      - TOP_RECENT_COUNT
+      - DB_URL
+    volumes:
+      - ./backend:/app:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      fundamentals-api:
+        condition: service_started
     restart: unless-stopped
 
   frontend:

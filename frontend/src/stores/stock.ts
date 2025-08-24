@@ -61,7 +61,7 @@ export const useStockStore = defineStore('stock', {
     },
   }),
   actions: {
-    async fetchStocks(params: { search: string; sort: string; order: 'ASC' | 'DESC'; page: number; pageSize: number }) {
+    async fetchStocks(params: { search: string; sort: string; order: 'ASC' | 'DESC'; page: number; pageSize: number; enrich?: boolean }) {
       this.stocks.loading = true;
       this.stocks.error = null;
       try {
@@ -70,9 +70,11 @@ export const useStockStore = defineStore('stock', {
         const order = params.order || 'DESC';
         const page = params.page || 1;
         const limit = params.pageSize || 20;
+        const enrich = params.enrich === true;
 
         let url = '/api/stocks';
         const query: Record<string, any> = { page, limit };
+        if (enrich) query.enrich = 'true';
 
         if (search) {
           url = '/api/stocks/search';

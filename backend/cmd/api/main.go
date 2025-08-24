@@ -54,12 +54,9 @@ func main() {
 	recommender := rec.NewService(pool)
 	fredClient := marketdata.NewFredClient()
 	recommender.SetCorporateBondYieldProvider(fredClient)
-	// Wire optional price provider if configured
-	if cfg.FMPAPIKey != "" {
-		pp := marketdata.NewFMPClient(cfg.FMPAPIKey)
-		recommender.SetPriceProvider(pp)
-		recommender.SetGrahamValuationProvider(pp)
-	}
+    // We now rely on the Python Fundamentals API to populate quotes_cache and
+    // fundamentals in the database. The Go service reads from cache and does
+    // not call external price or fundamentals providers directly.
 	// Enable quote cache and top-K enrichment
 	recommender.EnableQuoteCache(cfg.QuotesTTL)
     recommender.EnableGrahamValuation(cfg.FundamentalsTTL)
@@ -107,7 +104,7 @@ func main() {
     }()
 
 	// HTTP router
-	router := api.NewRouter(pool, ing, recommender, sugar)
+    router := api.NewRouter(pool, ing, recommender, sugar, cfg.FundamentalsAPIBase)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.BackendPort),

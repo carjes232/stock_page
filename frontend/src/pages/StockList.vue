@@ -12,7 +12,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
       </div>
-      <div class="flex gap-3">
+      <div class="flex gap-3 items-center">
         <select v-model="sort" class="select w-40">
           <option value="updated_at">Updated</option>
           <option value="ticker">Ticker</option>
@@ -26,6 +26,10 @@
           <option value="DESC">Desc</option>
           <option value="ASC">Asc</option>
         </select>
+        <label class="inline-flex items-center gap-2 text-sm text-slate-600">
+          <input type="checkbox" v-model="enrichList" />
+          Show fundamentals
+        </label>
       </div>
     </div>
 
@@ -68,6 +72,16 @@
             <span class="text-slate-600">Target Δ</span>
             <div class="font-medium" :class="deltaClass(s.price_target_delta)">
               {{ money(s.price_target_delta) }}
+            </div>
+          </div>
+          <div v-if="enrichList" class="mt-2 pt-2 border-t border-slate-200">
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-slate-600">IV</span>
+              <div class="font-medium">{{ money(s.intrinsic_value as any) }}</div>
+            </div>
+            <div class="flex justify-between items-center">
+              <span class="text-slate-600">IV (AAA)</span>
+              <div class="font-medium">{{ money(s.intrinsic_value_2 as any) }}</div>
             </div>
           </div>
         </div>
@@ -122,6 +136,7 @@ const sort = ref('updated_at');
 const order = ref<'ASC' | 'DESC'>('DESC');
 const page = ref(1);
 const pageSize = ref(20);
+const enrichList = ref(false);
 
 const items = computed(() => stocks.value.items);
 const total = computed(() => stocks.value.total);
@@ -174,7 +189,8 @@ async function load() {
     sort: sort.value,
     order: order.value,
     page: page.value,
-    pageSize: pageSize.value
+    pageSize: pageSize.value,
+    enrich: enrichList.value
   });
 }
 
@@ -202,7 +218,7 @@ function goToPage(pageNum: number) {
 }
 
 let t: any;
-watch([search, sort, order], () => {
+watch([search, sort, order, enrichList], () => {
   clearTimeout(t);
   t = setTimeout(() => {
     page.value = 1;

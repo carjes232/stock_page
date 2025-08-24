@@ -44,6 +44,8 @@ backend/tmp/
 backend/*.out
 backend/*.test
 backend/cover.*
+# Built backend binary (avoid committing local builds)
+backend/api
 # Go build artifacts (repo-wide)
 *.exe
 *.exe~

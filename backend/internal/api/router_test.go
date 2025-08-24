@@ -35,7 +35,7 @@ func setupMockRouter(t *testing.T) (*gin.Engine, pgxmock.PgxPoolIface) {
 
 	ingestSvc := ingest.NewService("", "", mock, log)
 	recSvc := rec.NewService(mock)
-	router := NewRouter(mock, ingestSvc, recSvc, log)
+    router := NewRouter(mock, ingestSvc, recSvc, log, "")
 
 	return router.(*gin.Engine), mock
 }

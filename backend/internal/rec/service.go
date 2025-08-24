@@ -10,18 +10,21 @@ import (
 )
 
 type Service struct {
-	db                         db.DBTX
-	prices                     PriceProvider
-	useCache                   bool
-	quotesTTL                  time.Duration
+    db                         db.DBTX
+    prices                     PriceProvider
+    useCache                   bool
+    quotesTTL                  time.Duration
 	topK                       int
-	grahamValuationProvider    GrahamValuationProvider
-	grahamValuationTTL         time.Duration
-	corporateBondYieldProvider CorporateBondYieldProvider
+    grahamValuationProvider    GrahamValuationProvider
+    grahamValuationTTL         time.Duration
+    corporateBondYieldProvider CorporateBondYieldProvider
+    bondYieldCache             float64
+    bondYieldCachedAt          time.Time
+    bondYieldCacheTTL          time.Duration
 }
 
 func NewService(db db.DBTX) *Service {
-	return &Service{db: db, topK: 20}
+    return &Service{db: db, topK: 20, bondYieldCacheTTL: 12 * time.Hour}
 }
 
 // PriceProvider is a narrow interface for fetching current prices.
@@ -77,7 +80,25 @@ func (s *Service) EnableGrahamValuation(ttl time.Duration) {
 
 // SetCorporateBondYieldProvider wires an optional corporate bond yield provider.
 func (s *Service) SetCorporateBondYieldProvider(p CorporateBondYieldProvider) {
-	s.corporateBondYieldProvider = p
+    s.corporateBondYieldProvider = p
+}
+
+// getBondYield returns the AAA corporate bond yield using an internal cache to avoid
+// repeated network calls. If provider is nil, returns 0 and false.
+func (s *Service) getBondYield(ctx context.Context) (float64, bool) {
+    if s.corporateBondYieldProvider == nil {
+        return 0, false
+    }
+    if s.bondYieldCache > 0 && time.Since(s.bondYieldCachedAt) <= s.bondYieldCacheTTL {
+        return s.bondYieldCache, true
+    }
+    y, err := s.corporateBondYieldProvider.GetAAACorporateBondYield(ctx)
+    if err != nil || y <= 0 {
+        return 0, false
+    }
+    s.bondYieldCache = y
+    s.bondYieldCachedAt = time.Now()
+    return y, true
 }
 
 type Recommendation struct {
@@ -160,8 +181,9 @@ LIMIT 500
 		return a.Score > b.Score
 	})
 
-	// Phase 2: price-aware enrichment for top-K only, then resort by new score.
-	if s.prices != nil && len(recs) > 0 {
+    // Phase 2: price-aware enrichment for top-K only, then resort by new score.
+    // Use either a live provider or the DB cache when enabled.
+    if len(recs) > 0 && (s.prices != nil || s.useCache) {
 		k := s.topK
 		if k > len(recs) {
 			k = len(recs)
@@ -171,11 +193,11 @@ LIMIT 500
 			enrichSet[recs[i].Ticker] = struct{}{}
 		}
 		priceByTicker := make(map[string]float64, k)
-		for t := range enrichSet {
-			if p, ok := s.getQuote(ctx, t); ok && p > 0 {
-				priceByTicker[t] = p
-			}
-		}
+        for t := range enrichSet {
+            if p, ok := s.getQuote(ctx, t); ok && p > 0 {
+                priceByTicker[t] = p
+            }
+        }
 		for i := 0; i < k; i++ {
 			if p, ok := priceByTicker[recs[i].Ticker]; ok {
 				cp := p
@@ -214,14 +236,12 @@ LIMIT 500
 				iv := e * (8.5 + 2*g*100)
 				recs[i].Intrinsic = &iv
 
-				if s.corporateBondYieldProvider != nil {
-					if bondYield, err := s.corporateBondYieldProvider.GetAAACorporateBondYield(ctx); err == nil && bondYield > 0 {
-						iv2 := iv * 4.4 / bondYield
-						recs[i].IntrinsicValue2 = &iv2
-					}
-				}
-			}
-		}
+                if by, ok := s.getBondYield(ctx); ok && by > 0 {
+                    iv2 := iv * 4.4 / by
+                    recs[i].IntrinsicValue2 = &iv2
+                }
+            }
+        }
 	}
 
 	if len(recs) > n {
@@ -232,69 +252,76 @@ LIMIT 500
 
 // getQuote returns a price from cache if fresh, otherwise calls provider and upserts cache when enabled.
 func (s *Service) getQuote(ctx context.Context, symbol string) (float64, bool) {
-	if s.prices == nil {
-		return 0, false
-	}
-	if s.useCache && s.quotesTTL > 0 {
-		var price float64
-		var asof time.Time
-		err := s.db.QueryRow(ctx, `SELECT price, as_of FROM quotes_cache WHERE symbol = $1`, symbol).Scan(&price, &asof)
-		if err == nil {
-			if time.Since(asof) <= s.quotesTTL {
-				return price, true
-			}
-		}
-		// stale or missing: fetch
-		p, err2 := s.prices.Quote(ctx, symbol)
-		if err2 != nil || p <= 0 {
-			if err == nil {
-				// return stale if we had one
-				return price, true
-			}
-			return 0, false
-		}
-		_, _ = s.db.Exec(ctx, `
+    // If cache enabled, prefer returning cached values even without a provider.
+    if s.useCache && s.quotesTTL > 0 {
+        var price float64
+        var asof time.Time
+        err := s.db.QueryRow(ctx, `SELECT price, as_of FROM quotes_cache WHERE symbol = $1`, symbol).Scan(&price, &asof)
+        if err == nil {
+            if time.Since(asof) <= s.quotesTTL {
+                return price, true
+            }
+        }
+        // If provider exists, try to refresh; else return stale if available.
+        if s.prices != nil {
+            p, err2 := s.prices.Quote(ctx, symbol)
+            if err2 != nil || p <= 0 {
+                if err == nil {
+                    // return stale if we had one
+                    return price, true
+                }
+                return 0, false
+            }
+            _, _ = s.db.Exec(ctx, `
 INSERT INTO quotes_cache(symbol, price, as_of, updated_at)
 VALUES ($1,$2, now(), now())
 ON CONFLICT (symbol) DO UPDATE SET price=EXCLUDED.price, as_of=EXCLUDED.as_of, updated_at=EXCLUDED.updated_at
 `, symbol, p)
-		return p, true
-	}
-	// No cache enabled: call provider directly
-	p, err := s.prices.Quote(ctx, symbol)
-	if err != nil || p <= 0 {
-		return 0, false
-	}
-	return p, true
+            return p, true
+        }
+        // No provider; return stale if available, otherwise miss.
+        if err == nil {
+            return price, true
+        }
+        return 0, false
+    }
+    // No cache configured: call provider directly if available.
+    if s.prices == nil {
+        return 0, false
+    }
+    p, err := s.prices.Quote(ctx, symbol)
+    if err != nil || p <= 0 {
+        return 0, false
+    }
+    return p, true
 }
 
 // EnrichTicker returns optional enrichment for a single ticker.
 // It uses the configured price provider/cache and fundamentals table when available.
 func (s *Service) EnrichTicker(ctx context.Context, ticker string, targetTo *float64) (price *float64, percentUpside *float64, eps *float64, growth *float64, intrinsic *float64, intrinsic2 *float64) {
-	// Price and upside
-	if s.prices != nil {
-		if p, ok := s.getQuote(ctx, ticker); ok && p > 0 {
-			cp := p
-			price = &cp
-			if targetTo != nil && *targetTo > 0 {
-				up := (*targetTo / cp) - 1.0
-				percentUpside = &up
-			}
-		}
-	}
+    // Price and upside
+    if s.prices != nil || s.useCache {
+        if p, ok := s.getQuote(ctx, ticker); ok && p > 0 {
+            cp := p
+            price = &cp
+            if targetTo != nil && *targetTo > 0 {
+                up := (*targetTo / cp) - 1.0
+                percentUpside = &up
+            }
+        }
+    }
 	// Fundamentals
-	if e, g, ok := s.getGrahamValuation(ctx, ticker); ok {
-		eps = &e
-		growth = &g
-		iv := e * (8.5 + 2*g)
-		intrinsic = &iv
-		if s.corporateBondYieldProvider != nil {
-			if bondYield, err := s.corporateBondYieldProvider.GetAAACorporateBondYield(ctx); err == nil && bondYield > 0 {
-				iv2 := iv * 4.4 / bondYield
-				intrinsic2 = &iv2
-			}
-		}
-	}
+    if e, g, ok := s.getGrahamValuation(ctx, ticker); ok {
+        eps = &e
+        growth = &g
+        // g is stored as a decimal in DB; Graham formula expects percent
+        iv := e * (8.5 + 2*g*100)
+        intrinsic = &iv
+        if by, ok := s.getBondYield(ctx); ok && by > 0 {
+            iv2 := iv * 4.4 / by
+            intrinsic2 = &iv2
+        }
+    }
 	return
 }
 

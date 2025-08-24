@@ -19,6 +19,14 @@ type Config struct {
     PriceTopK         int
     FundamentalsTTL   time.Duration
     PriceWarmInterval time.Duration
+    // If true, do not wire the built-in Graham valuation provider (EPS/growth).
+    // This lets external tools populate the fundamentals table instead.
+    DisableGrahamProvider bool
+    // Optional Python Fundamentals API base URL (inside Compose: http://fundamentals-api:9000)
+    FundamentalsAPIBase string
+    // Intervals for external updaters (used by docs/compose only)
+    PriceUpdateInterval       time.Duration
+    FundamentalsUpdateInterval time.Duration
 }
 
 func getenv(key, def string) string {
@@ -74,7 +82,22 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid INGEST_INTERVAL: %w", err)
 	}
 
-	ingestOnStart := getenv("INGEST_ON_START", "true") == "true"
+    ingestOnStart := getenv("INGEST_ON_START", "true") == "true"
+    disableGraham := getenv("DISABLE_GRAHAM_PROVIDER", "false") == "true"
+
+    fundamentalsAPIBase := getenv("FUNDAMENTALS_API_BASE", "")
+
+    // External updater intervals (used by scheduler service; keep here for clarity)
+    priceUpdStr := getenv("PRICE_UPDATE_INTERVAL", "24h")
+    priceUpdEvery, err := time.ParseDuration(priceUpdStr)
+    if err != nil {
+        return nil, fmt.Errorf("invalid PRICE_UPDATE_INTERVAL: %w", err)
+    }
+    fundUpdStr := getenv("FUNDAMENTALS_UPDATE_INTERVAL", "720h") // 30d
+    fundUpdEvery, err := time.ParseDuration(fundUpdStr)
+    if err != nil {
+        return nil, fmt.Errorf("invalid FUNDAMENTALS_UPDATE_INTERVAL: %w", err)
+    }
 
     return &Config{
         BackendPort:    port,
@@ -88,5 +111,9 @@ func Load() (*Config, error) {
         PriceTopK:      topK,
         FundamentalsTTL: fundTTL,
         PriceWarmInterval: warmEvery,
+        DisableGrahamProvider: disableGraham,
+        FundamentalsAPIBase: fundamentalsAPIBase,
+        PriceUpdateInterval: priceUpdEvery,
+        FundamentalsUpdateInterval: fundUpdEvery,
     }, nil
 }
