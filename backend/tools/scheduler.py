@@ -31,6 +31,14 @@ def get_watchlist_symbols(db_url: str) -> List[str]:
     return out
 
 
+def get_portfolio_symbols(db_url: str) -> List[str]:
+    out: List[str] = []
+    with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT ticker FROM portfolio")
+        out = [t.strip().upper() for (t,) in cur.fetchall() if t and t.strip()]
+    return out
+
+
 def main():
     api = getenv("FUNDAMENTALS_API_BASE", "http://fundamentals-api:9000")
     db_url = os.getenv("DB_URL")
@@ -53,7 +61,11 @@ def main():
         if symbols:
             target = symbols
         else:
-            target = get_watchlist_symbols(db_url)
+            # Get both watchlist and portfolio symbols
+            watchlist_symbols = get_watchlist_symbols(db_url)
+            portfolio_symbols = get_portfolio_symbols(db_url)
+            # Combine and deduplicate symbols
+            target = list(set(watchlist_symbols + portfolio_symbols))
         if target:
             print(f"[scheduler] target symbols: {len(target)}", flush=True)
         else:
@@ -69,6 +81,14 @@ def main():
                     print(f"[scheduler] updating quotes for {len(target)} symbols", flush=True)
                     r = requests.post(api + "/api/update/quotes", json={"symbols": target}, timeout=45)
                     print(f"[scheduler] quotes status={r.status_code} body={r.text[:200]}", flush=True)
+                    # Log failed symbols if available in response
+                    try:
+                        response_data = r.json()
+                        failed_symbols = response_data.get("failed_symbols", [])
+                        if failed_symbols:
+                            print(f"[scheduler] failed to update quotes for symbols: {failed_symbols}", flush=True)
+                    except Exception:
+                        pass  # Ignore JSON parsing errors
                 except Exception as e:
                     print(f"[scheduler] quotes error: {e}", flush=True)
                 next_price = now + price_every

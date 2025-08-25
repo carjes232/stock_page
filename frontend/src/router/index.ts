@@ -4,7 +4,7 @@ import StockDetail from '../pages/StockDetail.vue';
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'home', component: StockList },
-  { path: '/stock/:ticker', name: 'stock-detail', component: StockDetail, props: true }
+  { path: '/stock/:ticker', name: 'stock-detail', component: StockDetail, props: true },
 ];
 
 const router = createRouter({

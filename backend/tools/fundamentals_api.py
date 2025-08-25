@@ -99,12 +99,14 @@ def update_quotes(req: UpdateQuotesRequest):
         raise HTTPException(status_code=400, detail="no symbols")
     updated = 0
     errors = 0
+    failed_symbols = []
     with get_db() as conn:
         for sym in syms:
             sym = sym.strip().upper()
             try:
                 p = yahoo_price(sym)
                 if not isinstance(p, (int, float)) or p <= 0:
+                    failed_symbols.append(sym)
                     continue
                 with conn.cursor() as cur:
                     cur.execute(
@@ -118,9 +120,12 @@ ON CONFLICT (symbol) DO UPDATE SET price=EXCLUDED.price, as_of=EXCLUDED.as_of, u
                 updated += 1
             except Exception as e:
                 errors += 1
+                failed_symbols.append(sym)
                 print(f"[quotes] {sym} error: {e}", flush=True)
     print(f"[quotes] updated={updated} errors={errors} symbols={len(syms)}", flush=True)
-    return {"updated": updated, "errors": errors, "symbols": syms}
+    if failed_symbols:
+        print(f"[quotes] failed symbols: {failed_symbols}", flush=True)
+    return {"updated": updated, "errors": errors, "symbols": syms, "failed_symbols": failed_symbols}
 
 @app.get("/healthz")
 def healthz():

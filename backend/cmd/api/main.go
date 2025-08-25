@@ -13,6 +13,7 @@ import (
 	"stockchallenge/backend/internal/db"
 	"stockchallenge/backend/internal/ingest"
 	"stockchallenge/backend/internal/marketdata"
+	"stockchallenge/backend/internal/portfolio"
 	"stockchallenge/backend/internal/rec"
 
 	"github.com/joho/godotenv"
@@ -51,6 +52,10 @@ func main() {
 
 	// Services
 	ing := ingest.NewService(cfg.APIBase, cfg.APIToken, pool, sugar)
+	portSvc, err := portfolio.NewService(pool, sugar, cfg.GeminiAPIKey, cfg.GeminiModelID)
+	if err != nil {
+		sugar.Fatalf("portfolio service error: %v", err)
+	}
 	recommender := rec.NewService(pool)
 	fredClient := marketdata.NewFredClient()
 	recommender.SetCorporateBondYieldProvider(fredClient)
@@ -104,7 +109,7 @@ func main() {
     }()
 
 	// HTTP router
-    router := api.NewRouter(pool, ing, recommender, sugar, cfg.FundamentalsAPIBase)
+    router := api.NewRouter(pool, ing, recommender, portSvc, sugar, cfg.FundamentalsAPIBase)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.BackendPort),

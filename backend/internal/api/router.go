@@ -3,6 +3,7 @@ package api
 import (
     "context"
     "encoding/json"
+	"io"
     "net/http"
     "strconv"
     "strings"
@@ -10,6 +11,7 @@ import (
 
 	"stockchallenge/backend/internal/db"
 	"stockchallenge/backend/internal/ingest"
+	"stockchallenge/backend/internal/portfolio"
 	"stockchallenge/backend/internal/rec"
 
 	"github.com/gin-gonic/gin"
@@ -20,11 +22,12 @@ type RouterDeps struct {
     DB          db.DBTX
     Ingest      *ingest.Service
     Recommender *rec.Service
+	Portfolio   *portfolio.Service
     Log         *zap.SugaredLogger
     FundamentalsAPI string
 }
 
-func NewRouter(db db.DBTX, ing *ingest.Service, recommender *rec.Service, log *zap.SugaredLogger, fundamentalsAPI string) http.Handler {
+func NewRouter(db db.DBTX, ing *ingest.Service, recommender *rec.Service, portSvc *portfolio.Service, log *zap.SugaredLogger, fundamentalsAPI string) http.Handler {
     gin.SetMode(gin.ReleaseMode)
     r := gin.New()
     r.Use(gin.Recovery())
@@ -34,6 +37,7 @@ func NewRouter(db db.DBTX, ing *ingest.Service, recommender *rec.Service, log *z
         DB:              db,
         Ingest:          ing,
         Recommender:     recommender,
+		Portfolio:       portSvc,
         Log:             log,
         FundamentalsAPI: fundamentalsAPI,
     }
@@ -54,9 +58,60 @@ func NewRouter(db db.DBTX, ing *ingest.Service, recommender *rec.Service, log *z
         api.GET("/watchlist", deps.getWatchlist)
         api.POST("/watchlist", deps.addToWatchlist)
         api.DELETE("/watchlist/:ticker", deps.removeFromWatchlist)
+		api.POST("/portfolio/upload", deps.uploadPortfolio)
+		api.GET("/portfolio", deps.getPortfolio)
     }
 
 	return r
+}
+
+func (h *RouterDeps) uploadPortfolio(c *gin.Context) {
+	file, _, err := c.Request.FormFile("image")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+		return
+	}
+	defer file.Close()
+
+	imageData, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read image"})
+		return
+	}
+
+	// Hardcoded user ID for now
+	userID := "a4f68b5c-5a4f-4698-852d-732b8e4b2e3c"
+
+	portfolioData, err := h.Portfolio.ExtractAndSavePortfolio(c.Request.Context(), userID, imageData)
+	if err != nil {
+		h.Log.Warnf("portfolio extraction failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to extract portfolio"})
+		return
+	}
+
+	c.JSON(http.StatusOK, portfolioData)
+}
+
+func (h *RouterDeps) getPortfolio(c *gin.Context) {
+	// Hardcoded user ID for now
+	userID := "a4f68b5c-5a4f-4698-852d-732b8e4b2e3c"
+
+	rows, err := h.DB.Query(c, `SELECT ticker, position, average_price FROM portfolio WHERE user_id = $1 ORDER BY ticker`, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
+	defer rows.Close()
+
+	items := make([]gin.H, 0, 64)
+	for rows.Next() {
+		var ticker string
+		var position, averagePrice float64
+		if err := rows.Scan(&ticker, &position, &averagePrice); err == nil {
+			items = append(items, gin.H{"ticker": ticker, "position": position, "average_price": averagePrice})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
 func (h *RouterDeps) listStocks(c *gin.Context) {
