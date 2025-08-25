@@ -61,9 +61,10 @@ def update_fundamentals(req: UpdateFundamentalsRequest):
                     eps = float(eps_cur)
                 if eps is None or eps == 0:
                     continue
-                if req.use_final_metric:
-                    gm = res.get("final_metric_percent")
-                else:
+                # Always use the final metric as it's more comprehensive
+                gm = res.get("final_metric_percent")
+                if not isinstance(gm, (int, float)):
+                    # Fallback to forward_yoy_avg_percent if final_metric_percent is not available
                     gm = res.get("forward_yoy_avg_percent")
                 if not isinstance(gm, (int, float)):
                     continue

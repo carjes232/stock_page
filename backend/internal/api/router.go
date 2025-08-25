@@ -212,7 +212,7 @@ func (h *RouterDeps) refreshTickerAsync(ticker string) {
             need = true
         }
         if need {
-            bodyF, _ := json.Marshal(gin.H{"symbols": []string{t}, "use_final_metric": false})
+            bodyF, _ := json.Marshal(gin.H{"symbols": []string{t}, "use_final_metric": true})
             _, _ = http.Post(strings.TrimRight(h.FundamentalsAPI, "/")+"/api/update/fundamentals", "application/json", strings.NewReader(string(bodyF)))
         }
     }(strings.ToUpper(strings.TrimSpace(ticker)))

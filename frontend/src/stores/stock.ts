@@ -41,6 +41,12 @@ export type RecItem = {
   updated_at: string;
 };
 
+export type WatchlistItem = {
+  ticker: string;
+  notes: string | null;
+  added_at: string;
+}
+
 export const useStockStore = defineStore('stock', {
   state: () => ({
     stocks: {
@@ -51,6 +57,11 @@ export const useStockStore = defineStore('stock', {
     },
     recommendations: {
       items: [] as RecItem[],
+      loading: false,
+      error: null as string | null,
+    },
+    watchlist: {
+      items: [] as WatchlistItem[],
       loading: false,
       error: null as string | null,
     },
@@ -116,6 +127,34 @@ export const useStockStore = defineStore('stock', {
         this.detail.error = e?.message || 'Failed to load';
       } finally {
         this.detail.loading = false;
+      }
+    },
+    async fetchWatchlist() {
+      this.watchlist.loading = true;
+      this.watchlist.error = null;
+      try {
+        const { data } = await axios.get('/api/watchlist');
+        this.watchlist.items = data.items ?? [];
+      } catch (e: any) {
+        this.watchlist.error = e?.message || 'Failed to load';
+      } finally {
+        this.watchlist.loading = false;
+      }
+    },
+    async addToWatchlist(ticker: string) {
+      try {
+        await axios.post('/api/watchlist', { ticker });
+        await this.fetchWatchlist(); // Refresh watchlist
+      } catch (e: any) {
+        console.error('Failed to add to watchlist', e);
+      }
+    },
+    async removeFromWatchlist(ticker: string) {
+      try {
+        await axios.delete(`/api/watchlist/${ticker}`);
+        await this.fetchWatchlist(); // Refresh watchlist
+      } catch (e: any) {
+        console.error('Failed to remove from watchlist', e);
       }
     },
   },

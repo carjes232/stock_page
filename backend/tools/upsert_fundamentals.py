@@ -65,9 +65,6 @@ def main():
     if not db_url:
         print("DB_URL not set in env")
         sys.exit(1)
-    if not os.getenv("ALPHAVANTAGE_KEY"):
-        print("ALPHAVANTAGE_KEY not set in env")
-        sys.exit(1)
 
     symbols = parse_symbols(args.symbols)
     if not symbols:
@@ -81,18 +78,23 @@ def main():
                 res = compute_metrics(
                     sym,
                     momentum_mode=args.momentum_mode,
-                    winsor=args.winsor,
+                    winsor=str(args.winsor),
                     no_blend_longterm=args.no_blend_longterm,
                     weights=args.weights,
                 )
-                # Prefer next year EPS; fall back to current EPS
+                # EPS selection: prefer TTM (sum of last 4 quarters),
+                # then fall back to next-year EPS estimate, then current-year.
+                eps_ttm = res.get("eps_ttm")
                 eps_next = res.get("eps_next")
                 eps_cur = res.get("eps_current")
                 eps = None
-                if isinstance(eps_next, (int, float)):
+                if isinstance(eps_ttm, (int, float)):
+                    eps = float(eps_ttm)
+                elif isinstance(eps_next, (int, float)):
                     eps = float(eps_next)
                 elif isinstance(eps_cur, (int, float)):
                     eps = float(eps_cur)
+
                 if eps is None or eps == 0:
                     print(f"[{sym}] skip: missing EPS")
                     continue

@@ -105,3 +105,4 @@ coverage/
 .tmp-*/
 **/.turbo/
 **/.parcel-cache/
+__pycache__/

@@ -38,7 +38,8 @@ def main():
         raise SystemExit("DB_URL not set")
     syms_env = os.getenv("FUNDAMENTALS_SYMBOLS")
     symbols = [s.strip().upper() for s in syms_env.split(",") if s.strip()] if syms_env else None
-    use_final = getenv("FUNDAMENTALS_USE_FINAL_METRIC", "false") == "true"
+    # Always use the final metric as it's more comprehensive
+    use_final = True
     price_every = parse_duration(getenv("PRICE_UPDATE_INTERVAL", "24h"))
     fund_every = parse_duration(getenv("FUNDAMENTALS_UPDATE_INTERVAL", "720h"))
     # recentN is ignored now; we refresh only watchlist for scheduled jobs

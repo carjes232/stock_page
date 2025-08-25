@@ -1,43 +1,41 @@
 #!/usr/bin/env python3
 """
-Free EPS-growth metric using Alpha Vantage (quarterly EPS surprises) + Yahoo Finance (yahooquery).
+Free EPS-growth metric using Yahoo Finance (yahooquery) only — with precise control
+of EPS-surprise aggregation and optional winsorization.
 
-This module exposes `compute_metrics(symbol, ...)` and a small CLI.
+What’s included:
+- Projection choice: --projection-mode constant | glide
+- Manual EPS path: --manual-eps "2026:4.17,2027:5.63,2028:6.65"
+- Prints BOTH arithmetic avg% and CAGR% across FY range
+- Revision-breadth adjustment
+- EPS TTM and Forward P/E
+- **Current price** (new)
 
-Env:
-  export ALPHAVANTAGE_KEY="YOUR_KEY"
+Install:
+  pip install yahooquery
 
-Install (inside repo root):
-  pip install -r backend/tools/requirements.txt
+Examples:
+  # Raw surprise sum, glide to 22% terminal, 4-year path:
+  python3 eps_metric_free.py --symbol NVDA --projection-mode glide --terminal-growth 0.22 --horizon 4 --debug
 
-CLI example:
-  python3 backend/tools/eps_metric_free.py --symbol NVDA --json
+  # Match an external consensus path exactly:
+  python3 eps_metric_free.py --symbol NVDA     --manual-eps "2026:4.17,2027:5.63,2028:6.65" --force-years 2026-2028 --debug
+
+  # Original constant projection (now also prints CAGR):
+  python3 eps_metric_free.py --symbol NVDA --projection-mode constant --horizon 5 --debug
 """
 import argparse
 import datetime as dt
 import json
 import math
-import os
+import sys
 from typing import Dict, List, Optional, Tuple
-
-import requests
-import dotenv
-
-dotenv.load_dotenv()
 
 try:
     from yahooquery import Ticker  # type: ignore
-except Exception:  # pragma: no cover - optional runtime dependency
-    raise RuntimeError("Missing dependency: yahooquery. Install with: pip install -r backend/tools/requirements.txt")
-
-# -------------------- HTTP helper --------------------
-def http_get(url: str, params: Dict[str, str]) -> dict:
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    try:
-        return r.json()
-    except json.JSONDecodeError as e:  # pragma: no cover - network content
-        raise RuntimeError(f"Non-JSON response from {url}: {r.text[:200]}") from e
+except Exception:
+    print("Missing dependency: yahooquery. Install with: pip install yahooquery")
+    raise
 
 # -------------------- math helpers --------------------
 def winsorize(x: float, ceil_abs: Optional[float]) -> float:
@@ -46,6 +44,7 @@ def winsorize(x: float, ceil_abs: Optional[float]) -> float:
     return max(min(x, ceil_abs), -ceil_abs)
 
 def ewma_avg_lastN(values: List[float], N: int = 4, halflife: float = 2.0) -> Optional[float]:
+    """EWMA average of the newest N values (values expected newest->oldest)."""
     seq = [v for v in values if v is not None][:N]
     if not seq:
         return None
@@ -55,6 +54,7 @@ def ewma_avg_lastN(values: List[float], N: int = 4, halflife: float = 2.0) -> Op
     return sum(v * w for v, w in zip(seq, weights)) / wsum if wsum else None
 
 def yoy_series(vals: List[float]) -> List[float]:
+    """Return list of YoY percent changes between consecutive values (in % units)."""
     out: List[float] = []
     for i in range(1, len(vals)):
         prev, now = vals[i-1], vals[i]
@@ -66,54 +66,66 @@ def yoy_series(vals: List[float]) -> List[float]:
 def avg(lst: List[float]) -> Optional[float]:
     return (sum(lst) / len(lst)) if lst else None
 
-# -------------------- Alpha Vantage: EPS surprises --------------------
-def av_last_surprises(symbol: str, key: str, recalc: bool = True,
-                      winsor: Optional[float] = None) -> Tuple[List[float], List[str], List[Optional[float]], Dict]:
-    """Returns (surprises%, quarters, reported_eps, dbg).
-
-    All series are newest->oldest per AV docs. reported_eps contains the raw
-    Alpha Vantage reportedEPS values (floats when available, else None).
+# -------------------- Yahoo: EPS surprises (momentum) --------------------
+def yahoo_last_surprises(symbol: str, winsor: Optional[float] = None) -> Tuple[List[float], List[str], Dict]:
     """
-    dbg = {}
-    data = http_get("https://www.alphavantage.co/query",
-                    {"function": "EARNINGS", "symbol": symbol, "apikey": key})
-    rows = data.get("quarterlyEarnings", []) or []
-    surprises: List[float] = []
-    quarters: List[str] = []
-    rep_eps: List[Optional[float]] = []
-    for r in rows:
-        sp = None
-        rep = r.get("reportedEPS")
-        # Track reported EPS raw value (float or None)
-        try:
-            rep_eps.append(float(rep)) if rep not in (None, "None") else rep_eps.append(None)
-        except Exception:
-            rep_eps.append(None)
-        if recalc:
-            est = r.get("estimatedEPS")
+    Build surprise% list (newest->oldest) from Yahoo's earningsChart.quarterly.
+    surprise% = (actual - estimate) / |estimate| * 100
+    Returns (surprises%_final, quarters_labels, debug).
+    Debug includes both raw and winsorized series for transparency.
+    """
+    dbg: Dict = {}
+    raw_oldest_first: List[float] = []
+    quarters_oldest_first: List[str] = []
+
+    try:
+        t = Ticker(symbol)
+        e = t.earnings
+        entry = e.get(symbol, {}) if isinstance(e, dict) else {}
+        earnings_section = entry.get("earnings") or entry
+        chart = (earnings_section.get("earningsChart") or {}) if isinstance(earnings_section, dict) else {}
+        quarterly = chart.get("quarterly") or []
+        if not isinstance(quarterly, list):
+            quarterly = []
+
+        for q in quarterly:
+            if not isinstance(q, dict):
+                continue
+            sp = None
             try:
-                if rep not in (None, "None") and est not in (None, "None", 0, "0"):
-                    sp = (float(rep) - float(est)) / float(est) * 100.0
-            except Exception:
-                sp = None
-        else:
-            sp_str = r.get("surprisePercentage")
-            try:
-                if sp_str is not None and sp_str != "None":
-                    sp = float(sp_str)
+                if isinstance(q.get("surprisePercent"), (int, float)):
+                    sp = float(q["surprisePercent"])  # already in %
                 else:
-                    surprise = r.get("surprise"); est = r.get("estimatedEPS")
-                    if surprise is not None and est not in (None, "None", 0, "0"):
-                        sp = float(surprise) / float(est) * 100.0
+                    act = q.get("actual")
+                    est = q.get("estimate")
+                    if act is not None and est is not None and est != 0:
+                        sp = (float(act) - float(est)) / abs(float(est)) * 100.0
             except Exception:
                 sp = None
-        if sp is not None:
-            sp = winsorize(float(sp), winsor) if winsor is not None else float(sp)
-            surprises.append(sp)
-            quarters.append(str(r.get("fiscalDateEnding")))
-    dbg["surprise%_newest_first"] = surprises[:8]
-    dbg["quarters_used"] = quarters[:8]
-    return surprises, quarters, rep_eps, dbg
+            if sp is not None:
+                raw_oldest_first.append(float(sp))
+                quarters_oldest_first.append(str(q.get("date", "")))
+    except Exception as ex:
+        dbg["error"] = f"yahoo surprises fetch failed: {ex}"
+
+    # Flip to newest->oldest for downstream
+    raw_newest_first = list(reversed(raw_oldest_first))
+    quarters_newest_first = list(reversed(quarters_oldest_first))
+
+    # Apply winsor if requested (None = no clipping)
+    if winsor is not None:
+        clipped_newest_first = [winsorize(x, winsor) for x in raw_newest_first]
+        final_series = clipped_newest_first
+    else:
+        clipped_newest_first = raw_newest_first[:]  # identical when no winsor
+        final_series = raw_newest_first
+
+    dbg["surprise%_raw_newest_first"] = raw_newest_first[:8]
+    if winsor is not None:
+        dbg["surprise%_winsor_newest_first"] = clipped_newest_first[:8]
+    dbg["quarters_used"] = quarters_newest_first[:8]
+
+    return final_series, quarters_newest_first, dbg
 
 def sum_last4_surprise_percent(values: List[float]) -> Optional[float]:
     seq = [v for v in values if v is not None]
@@ -121,12 +133,14 @@ def sum_last4_surprise_percent(values: List[float]) -> Optional[float]:
         return None
     return sum(seq[:4])  # newest->oldest
 
-# -------------------- Yahoo: EPS, growth, revisions, price --------------------
+# -------------------- Yahoo core: EPS, growth, revisions, price, EPS TTM --------------------
 def _fallback_longterm_from_analysis(t: Ticker) -> Optional[float]:
+    """Try to find a 5y/long-term growth value in t.analysis. Return decimal or None."""
     try:
         an = t.analysis
         if not isinstance(an, dict):
             return None
+
         def scan(obj):
             found = []
             if isinstance(obj, dict):
@@ -145,6 +159,7 @@ def _fallback_longterm_from_analysis(t: Ticker) -> Optional[float]:
                 for it in obj:
                     found.extend(scan(it))
             return found
+
         cands = scan(an)
         if cands:
             for c in cands:
@@ -157,7 +172,10 @@ def _fallback_longterm_from_analysis(t: Ticker) -> Optional[float]:
 def parse_yahoo_core(symbol: str) -> Tuple[
     Optional[float], Optional[float], Optional[float], Dict, Dict, Optional[int]
 ]:
-    """Returns: cur_year_eps, next_year_eps, long_term_growth_decimal, debug_trend, revisions_by_period, fiscal_base_year"""
+    """
+    Returns:
+      cur_year_eps, next_year_eps, long_term_growth_decimal, debug_trend, revisions_by_period, fiscal_base_year
+    """
     dbg: Dict = {}
     revisions: Dict[str, Dict[str, int]] = {}
 
@@ -233,6 +251,11 @@ def parse_yahoo_core(symbol: str) -> Tuple[
 
 def blended_forward_growth(cur_eps: float, next_eps: float, long_term: Optional[float],
                            use_blend: bool = True) -> float:
+    """
+    Returns a DECIMAL growth rate used to project years 2..N.
+    g1 = next/cur - 1 (near-term). If long_term exists and use_blend, blend 60/40 (g1/lt).
+    Clamp to [-90%, +300%].
+    """
     g1 = (next_eps / cur_eps - 1.0) if cur_eps else 0.0
     if long_term is not None and use_blend:
         g = 0.60 * g1 + 0.40 * float(long_term)
@@ -251,19 +274,87 @@ def build_eps_path(cur_eps: float, next_eps: float, g: float,
         seq.append(last)
     return [(base_year + i, float(seq[i])) for i in range(len(seq))]
 
-def forward_yoy_avg_from_pairs(pairs: List[Tuple[int, float]],
-                               force_years: Optional[Tuple[int, int]]) -> Tuple[Optional[float], List[float], List[Tuple[int, float]]]:
-    if not pairs:
-        return None, [], []
-    if force_years:
-        lo, hi = force_years
-        pairs = [(y, v) for (y, v) in pairs if lo <= y <= hi]
+# --------- NEW: glide projection + manual EPS + avg & CAGR helpers ----------
+def parse_manual_eps(s: Optional[str]) -> Optional[List[Tuple[int, float]]]:
+    """
+    Parse --manual-eps like: "2026:4.17,2027:5.63,2028:6.65"
+    Returns sorted [(year, eps), ...]
+    """
+    if not s:
+        return None
+    pairs = []
+    for tok in s.split(","):
+        if ":" not in tok:
+            continue
+        y, v = tok.split(":", 1)
+        try:
+            pairs.append((int(y.strip()), float(v.strip())))
+        except Exception:
+            pass
     pairs.sort(key=lambda x: x[0])
-    vals = [v for (_, v) in pairs]
-    ys = yoy_series(vals)  # percents
-    return avg(ys), ys, pairs
+    return pairs or None
 
+def avg_and_cagr_from_pairs(pairs: List[Tuple[int, float]]):
+    """
+    Returns (arith_avg_pct, cagr_pct, yoy_list_pct, used_pairs_sorted)
+    """
+    if not pairs or len(pairs) < 2:
+        return None, None, [], []
+    pairs = sorted(pairs, key=lambda x: x[0])
+    vals = [v for _, v in pairs]
+    ys = yoy_series(vals)  # list of % values
+    arith = avg(ys)
+    cagr = None
+    if vals[0] is not None and vals[0] != 0 and vals[-1] is not None:
+        years = len(vals) - 1
+        if years > 0:
+            cagr = ((vals[-1] / vals[0]) ** (1.0 / years) - 1.0) * 100.0
+    return arith, cagr, ys, pairs
+
+def build_eps_path_glide(cur_eps: float, next_eps: float, *,
+                         years_needed: int = 5,
+                         base_year: Optional[int] = None,
+                         long_term: Optional[float] = None,
+                         terminal_growth: Optional[float] = None) -> List[Tuple[int, float]]:
+    """
+    Glide from g1=(next/cur-1) toward gT over the horizon.
+    - If long_term is available, use it for gT; else use terminal_growth (default 22%).
+    - First step is exactly g1 (cur->next). Then interpolate linearly to gT.
+    """
+    if base_year is None:
+        base_year = dt.date.today().year
+    g1 = (next_eps / cur_eps - 1.0) if cur_eps else 0.0
+    gT = long_term if (long_term is not None) else (terminal_growth if terminal_growth is not None else min(0.25, g1 * 0.6))
+
+    # clamp
+    g1 = max(min(g1, 3.0), -0.9)
+    gT = max(min(gT, 3.0), -0.9)
+
+    seq = [cur_eps, next_eps]
+    remain = max(0, years_needed - 2)
+    for i in range(remain):
+        w = 1.0 if remain <= 1 else (i + 1) / float(remain)  # 0->1 across remaining steps
+        gi = (1.0 - w) * g1 + w * gT
+        gi = max(min(gi, 3.0), -0.9)
+        seq.append(seq[-1] * (1.0 + gi))
+    return [(base_year + i, float(seq[i])) for i in range(len(seq))]
+
+def filter_pairs_by_years(pairs: Optional[List[Tuple[int, float]]],
+                          force_years: Optional[Tuple[int, int]]) -> Optional[List[Tuple[int, float]]]:
+    if not pairs:
+        return pairs
+    if not force_years:
+        return sorted(pairs, key=lambda x: x[0])
+    lo, hi = force_years
+    out = [(y, v) for (y, v) in pairs if lo <= y <= hi]
+    return sorted(out, key=lambda x: x[0]) or None
+
+# -------------------- Revisions / Price / EPS TTM --------------------
 def revision_breadth_adj(revisions: Dict[str, Dict[str, int]]) -> float:
+    """
+    Small % adjustment (±5% max) from analyst revisions (prefer +1y; else 0y).
+    adj% = 5 * (up30 - down30) / max(1, up30 + down30)
+    """
     choose = None
     for key in ("+1y", "1y", "nextyear", "f+1y", "fy+1", "0y"):
         if key in revisions:
@@ -278,41 +369,45 @@ def revision_breadth_adj(revisions: Dict[str, Dict[str, int]]) -> float:
     return max(min(raw, 5.0), -5.0)
 
 def yahoo_price(symbol: str) -> Optional[float]:
-    """Return a best-effort last price.
-
-    Strategy:
-    1) Try yahooquery's Ticker.price (may log crumb warnings but still often works).
-    2) Fallback to Yahoo's public quote endpoint (no crumb required).
-    """
-    sym = symbol.upper().strip()
-    # 1) yahooquery
     try:
-        t = Ticker(sym)
+        t = Ticker(symbol)
         p = t.price
-        if isinstance(p, dict) and sym in p:
-            d = p[sym]
+        if isinstance(p, dict) and symbol in p:
+            d = p[symbol]
             for key in ("regularMarketPrice", "postMarketPrice", "preMarketPrice"):
                 v = d.get(key)
                 if v is not None:
                     return float(v)
     except Exception:
         pass
+    return None
 
-    # 2) Raw HTTP fallback
+def yahoo_eps_ttm_value(symbol: str) -> Optional[float]:
+    """Get EPS (TTM) via yahooquery."""
     try:
-        url = "https://query1.finance.yahoo.com/v7/finance/quote"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-            "Accept": "application/json",
-        }
-        r = requests.get(url, params={"symbols": sym}, headers=headers, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        res = (data.get("quoteResponse", {}) or {}).get("result", []) or []
-        if res:
-            d = res[0]
-            for key in ("regularMarketPrice", "postMarketPrice", "preMarketPrice"):
-                v = d.get(key)
+        t = Ticker(symbol)
+
+        p = t.price
+        if isinstance(p, dict) and symbol in p:
+            d = p[symbol] or {}
+            for k in ("epsTrailingTwelveMonths", "trailingEps", "trailingEPS"):
+                v = d.get(k)
+                if v is not None:
+                    return float(v)
+
+        ks = t.key_stats
+        if isinstance(ks, dict) and symbol in ks:
+            d = ks[symbol] or {}
+            for k in ("trailingEps", "epsTrailingTwelveMonths", "trailingEPS"):
+                v = d.get(k)
+                if v is not None:
+                    return float(v)
+
+        am = t.all_modules
+        if isinstance(am, dict) and symbol in am:
+            dks = (am[symbol] or {}).get("defaultKeyStatistics") or {}
+            for k in ("trailingEps", "trailingEPS", "epsTrailingTwelveMonths"):
+                v = dks.get(k)
                 if v is not None:
                     return float(v)
     except Exception:
@@ -326,6 +421,20 @@ def parse_force_years(s: Optional[str]) -> Optional[Tuple[int, int]]:
     try:
         a, b = s.replace(" ", "").split("-")
         return int(a), int(b)
+    except Exception:
+        return None
+
+def parse_winsor(s: Optional[str]) -> Optional[float]:
+    if s is None:
+        return None
+    s = s.strip().lower()
+    if s in ("none", "off", "no", "false", "0"):
+        return None
+    try:
+        val = float(s)
+        if val <= 0:
+            return None
+        return val
     except Exception:
         return None
 
@@ -345,97 +454,87 @@ def parse_weights(s: str) -> Dict[str, float]:
 # -------------------- Public API --------------------
 def compute_metrics(symbol: str, *,
                     momentum_mode: str = "sum",
-                    winsor: float = 60.0,
+                    winsor: Optional[str] = "none",
                     no_blend_longterm: bool = False,
                     weights: str = "momentum=0.5,forward=0.4,revisions=0.1",
                     force_years: Optional[str] = None,
+                    projection_mode: str = "constant",
+                    terminal_growth: float = 0.22,
+                    horizon: int = 5,
+                    manual_eps: Optional[str] = None,
                     debug: bool = False) -> Dict[str, object]:
     sym = symbol.upper()
     force_range = parse_force_years(force_years)
-    av_key = os.getenv("ALPHAVANTAGE_KEY")
-    if not av_key:
-        raise RuntimeError("Set ALPHAVANTAGE_KEY in your environment.")
+    winsor_val = parse_winsor(winsor)
 
-    # Surprises
-    surprises, quarters, dbg_av = [], [], {}
-    momentum_label = "Last4 surprise% (AV)"
+    # ---- Surprises (Yahoo) ----
+    surprises_final, quarters, dbg_surp = yahoo_last_surprises(sym, winsor=winsor_val)
+
     momentum = None
-    eps_ttm = None
-    try:
-        surprises, quarters, rep_eps, dbg_av = av_last_surprises(sym, av_key, recalc=True, winsor=winsor)
-        if momentum_mode == "sum":
-            momentum = sum_last4_surprise_percent(surprises)
-            momentum_label = "Last4 surprise% sum (AV)"
+    momentum_label = ""
+    if momentum_mode == "sum":
+        momentum = sum_last4_surprise_percent(surprises_final)
+        if winsor_val is None:
+            momentum_label = "Last4 surprise% sum (Yahoo, no winsor)"
         else:
-            momentum = ewma_avg_lastN(surprises, N=4, halflife=2.0)
-            momentum_label = "Last4 surprise% EWMA (AV)"
-        # Compute TTM EPS as sum of last 4 reported EPS values
-        if rep_eps:
-            vals = [v for v in rep_eps if isinstance(v, (int, float))]
-            if len(vals) >= 4:
-                eps_ttm = float(sum(vals[:4]))
-    except Exception as ex:  # pragma: no cover - network
-        dbg_av = {"error": str(ex)}
+            momentum_label = f"Last4 surprise% sum (Yahoo, winsor ±{winsor_val:g}%)"
+    else: # ewma_avg
+        momentum = ewma_avg_lastN(surprises_final, N=4, halflife=2.0)
+        if winsor_val is None:
+            momentum_label = "Last4 surprise% EWMA (Yahoo, no winsor)"
+        else:
+            momentum_label = f"Last4 surprise% EWMA (Yahoo, winsor ±{winsor_val:g}%)"
 
-    # Yahoo EPS path + revisions
-    pairs = None
-    forward = None
-    yoy_list: List[float] = []
-    used_pairs: List[Tuple[int, float]] = []
-    price = None
-    fwd_pe = None
-    cur_eps = None
-    next_eps = None
-    fiscal_year = None
-    dbg_y = {}
-    try:
-        cur_eps, next_eps, long_term, dbg_y, revisions, fiscal_year = parse_yahoo_core(sym)
-        if cur_eps is not None and next_eps is not None:
+    # ---- Yahoo EPS core + revisions + price + EPS TTM ----
+    cur_eps, next_eps, long_term, dbg_y, revisions, fiscal_year = parse_yahoo_core(sym)
+
+    # Build EPS path
+    pairs: Optional[List[Tuple[int, float]]] = None
+    if manual_eps:
+        pairs = parse_manual_eps(manual_eps)
+    elif (cur_eps is not None) and (next_eps is not None):
+        if projection_mode == "glide":
+            pairs = build_eps_path_glide(
+                cur_eps, next_eps,
+                years_needed=horizon,
+                base_year=fiscal_year,
+                long_term=None if no_blend_longterm else long_term,
+                terminal_growth=terminal_growth,
+            )
+        else: # constant
             g = blended_forward_growth(cur_eps, next_eps, long_term, use_blend=(not no_blend_longterm))
-            pairs = build_eps_path(cur_eps, next_eps, g, years_needed=5, base_year=fiscal_year)
-            forward, yoy_list, used_pairs = forward_yoy_avg_from_pairs(pairs, force_range)
-        price = yahoo_price(sym)
-        if price is not None and next_eps not in (None, 0):
-            fwd_pe = price / float(next_eps)
-        rev_adj = revision_breadth_adj(revisions)
-    except Exception as ex:  # pragma: no cover - network
-        dbg_y = {"error": str(ex)}
-        revisions = {}
-        rev_adj = 0.0
+            pairs = build_eps_path(cur_eps, next_eps, g, years_needed=horizon, base_year=fiscal_year)
 
-    # Final metric with weights
+    pairs = filter_pairs_by_years(pairs, force_range)
+
+    forward_arith, forward_cagr, yoy_list, used_pairs = avg_and_cagr_from_pairs(pairs or [])
+
+    # Price / forward P/E
+    price = yahoo_price(sym)
+    fwd_pe = (price / next_eps) if (price is not None and next_eps and next_eps != 0) else None
+
+    # EPS TTM (Yahoo)
+    eps_ttm = yahoo_eps_ttm_value(sym)
+
+    # ---- Revision breadth small adj ----
+    rev_adj = revision_breadth_adj(revisions)
+
+    # ---- Final metric with weights (use arithmetic forward avg%) ----
     W = parse_weights(weights)
     final = None
-    if any(v is not None for v in (momentum, forward)) or rev_adj != 0.0:
+    if (momentum is not None) or (forward_arith is not None) or (rev_adj != 0.0):
         m = momentum if momentum is not None else 0.0
-        f = forward if forward is not None else 0.0
+        f = forward_arith if forward_arith is not None else 0.0
         r = rev_adj
         denom = (W.get("momentum", 0) + W.get("forward", 0) + W.get("revisions", 0)) or 1.0
         final = (W.get("momentum", 0) * m + W.get("forward", 0) * f + W.get("revisions", 0) * r) / denom
-
-    # If AV path failed to produce eps_ttm, try Yahoo earningsChart quarterly actuals
-    if eps_ttm is None:
-        try:
-            t = Ticker(sym)
-            e = t.earnings
-            if isinstance(e, dict) and sym in e:
-                q = ((e.get(sym) or {}).get("earningsChart") or {}).get("quarterly") or []
-                # take the last 4 'actual' values (newest last in yahooquery output)
-                actuals = []
-                for it in q:
-                    v = it.get("actual")
-                    if isinstance(v, (int, float)):
-                        actuals.append(float(v))
-                if len(actuals) >= 4:
-                    eps_ttm = float(sum(actuals[-4:]))
-        except Exception:
-            pass
 
     return {
         "symbol": sym,
         "momentum_label": momentum_label,
         "momentum_percent": momentum,
-        "forward_yoy_avg_percent": forward,
+        "forward_yoy_avg_percent": forward_arith,
+        "forward_cagr_percent": forward_cagr,
         "revision_breadth_adj_percent": rev_adj,
         "final_metric_percent": final,
         "eps_current": cur_eps,
@@ -446,74 +545,133 @@ def compute_metrics(symbol: str, *,
         "fiscal_base_year": fiscal_year,
         "pairs_used": used_pairs,
         "yoy_list_percent": yoy_list,
-        "debug_alpha": dbg_av if debug else None,
-        "debug_yahoo": dbg_y if debug else None,
+        "debug_surprises": dbg_surp if debug else None,
+        "debug_eps_path": dbg_y if debug else None,
+        "revisions": revisions if debug else None,
     }
 
-
-def cli_main():  # pragma: no cover - CLI glue
-    ap = argparse.ArgumentParser(description="Free EPS-growth metric with AV + Yahoo, with EWMA, winsor, revisions, fiscal-year labeling.")
+# -------------------- Main --------------------
+def main():
+    ap = argparse.ArgumentParser(description="EPS-growth metric using Yahoo only, with EWMA, optional winsor, revisions, fiscal-year labeling.")
     ap.add_argument("--symbol", required=True)
     ap.add_argument("--baseline", type=float, default=None, help="Optional baseline to compare (e.g., TradingView-like)")
     ap.add_argument("--force-years", type=str, default=None, help="Optional filter range (e.g., 2026-2029)")
     ap.add_argument("--debug", action="store_true")
-    ap.add_argument("--json", action="store_true", help="Emit JSON instead of table")
-    ap.add_argument("--momentum-mode", choices=["sum", "ewma_avg"], default="sum", help="How to aggregate last 4 surprise%% (default: sum)")
-    ap.add_argument("--winsor", type=float, default=60.0, help="Cap per-quarter surprise%% at ±N (default: 60)")
-    ap.add_argument("--no-blend-longterm", action="store_true", help="Disable blending near-term growth with 5y long-term growth (if available)")
-    ap.add_argument("--weights", type=str, default="momentum=0.5,forward=0.4,revisions=0.1", help='Comma list like momentum=0.5,forward=0.4,revisions=0.1')
+
+    # knobs
+    ap.add_argument("--momentum-mode", choices=["sum", "ewma_avg"], default="sum",
+                    help="How to aggregate last 4 surprise%% (default: sum)")
+    ap.add_argument("--winsor", default="none",
+                    help="Cap per-quarter surprise%% at ±N; use 'none' to disable (default: none)")
+    ap.add_argument("--no-blend-longterm", action="store_true",
+                    help="Disable blending near-term growth with 5y long-term growth (if available)")
+    ap.add_argument("--weights", type=str, default="momentum=0.5,forward=0.4,revisions=0.1",
+                    help='Comma list like momentum=0.5,forward=0.4,revisions=0.1')
+
+    # NEW knobs
+    ap.add_argument("--projection-mode", choices=["constant", "glide"], default="constant",
+                    help="How to project beyond next FY (default: constant)")
+    ap.add_argument("--terminal-growth", type=float, default=0.22,
+                    help="Terminal growth (decimal) if long-term is missing; used by --projection-mode glide")
+    ap.add_argument("--horizon", type=int, default=5,
+                    help="Number of years to build in the EPS path (default: 5)")
+    ap.add_argument("--manual-eps", type=str, default=None,
+                    help='Override path with explicit pairs, e.g. "2026:4.17,2027:5.63,2028:6.65"')
 
     args = ap.parse_args()
-    res = compute_metrics(
-        args.symbol,
-        momentum_mode=args.momentum_mode,
-        winsor=args.winsor,
-        no_blend_longterm=args.no_blend_longterm,
-        weights=args.weights,
-        force_years=args.force_years,
-        debug=args.debug,
-    )
+    
+    try:
+        res = compute_metrics(
+            symbol=args.symbol,
+            momentum_mode=args.momentum_mode,
+            winsor=args.winsor,
+            no_blend_longterm=args.no_blend_longterm,
+            weights=args.weights,
+            force_years=args.force_years,
+            projection_mode=args.projection_mode,
+            terminal_growth=args.terminal_growth,
+            horizon=args.horizon,
+            manual_eps=args.manual_eps,
+            debug=args.debug,
+        )
+    except Exception as e:
+        print(f"Fatal error processing {args.symbol}: {e}", file=sys.stderr)
+        if args.debug:
+            import traceback
+            traceback.print_exc()
+        sys.exit(2)
 
-    if args.json:
-        print(json.dumps(res, default=str))
-        return
-
-    # Pretty print like original
-    symbol = res["symbol"]
-    momentum = res["momentum_percent"]
-    forward = res["forward_yoy_avg_percent"]
-    rev_adj = res["revision_breadth_adj_percent"]
-    final = res["final_metric_percent"]
-    fwd_pe = res["fwd_pe"]
-    momentum_label = res["momentum_label"]
-    force_range = parse_force_years(args.force_years)
-
-    print(f"\nSymbol: {symbol}")
-    if force_range:
+    # ---- Print ----
+    print(f"\nSymbol: {res['symbol']}")
+    if args.force_years:
+        force_range = parse_force_years(args.force_years)
         print(f"Forced forward year range: {force_range[0]}-{force_range[1]}")
     print("-" * 84)
-    print(f"{'Component':26} {'Value'}")
-    print("-" * 84)
-    print(f"{momentum_label:26} {('%.2f%%' % momentum) if momentum is not None else 'N/A'}")
-    print(f"{'Forward YoY avg% (Yahoo)':26} {('%.2f%%' % forward) if forward is not None else 'N/A'}")
-    print(f"{'Revision breadth adj%':26} {('%+.2f%%' % rev_adj)}")
-    if fwd_pe is not None:
-        print(f"{'Price / fwd EPS (P/E)':26} {('%.2f' % fwd_pe)}")
-    print(f"{'Final metric%':26} {('%.2f%%' % final) if final is not None else 'N/A'}")
+    print(f"{ 'Component':26} {'Value'}")
     print("-" * 84)
 
-    if args.baseline is not None and final is not None:
-        diff = abs(final - args.baseline)
+    momentum_val = f"{res['momentum_percent']:.2f}%" if res['momentum_percent'] is not None else "N/A"
+    print(f"{res['momentum_label']:26} {momentum_val}")
+
+    hlabel = ""
+    used_pairs = res['pairs_used']
+    if used_pairs:
+        hlabel = f" FY{used_pairs[0][0]}–FY{used_pairs[-1][0]}"
+
+    fwd_arith_val = f"{res['forward_yoy_avg_percent']:.2f}%" if res['forward_yoy_avg_percent'] is not None else "N/A"
+    print(f"{ 'Forward YoY avg% (arith)':26} {fwd_arith_val}{hlabel}")
+
+    fwd_cagr_val = f"{res['forward_cagr_percent']:.2f}%" if res['forward_cagr_percent'] is not None else "N/A"
+    print(f"{ 'Forward CAGR%':26} {fwd_cagr_val}{hlabel}")
+
+    rev_adj_val = f"{res['revision_breadth_adj_percent']:+.2f}%"
+    print(f"{ 'Revision breadth adj%':26} {rev_adj_val}")
+
+    if res['price'] is not None:
+        price_val = f"${res['price']:.2f}"
+        print(f"{ 'Current price':26} {price_val}")
+
+    if res['fwd_pe'] is not None:
+        fwd_pe_val = f"{res['fwd_pe']:.2f}"
+        print(f"{ 'Price / fwd EPS (P/E)':26} {fwd_pe_val}")
+
+    if res['eps_ttm'] is not None:
+        eps_ttm_val = f"{res['eps_ttm']:.2f}"
+        print(f"{ 'EPS TTM':26} {eps_ttm_val}")
+
+    final_val = f"{res['final_metric_percent']:.2f}%" if res['final_metric_percent'] is not None else "N/A"
+    print(f"{ 'Final metric%':26} {final_val}")
+    print("-" * 84)
+
+    if args.baseline is not None and res['final_metric_percent'] is not None:
+        diff = abs(res['final_metric_percent'] - args.baseline)
         print(f"Baseline: {args.baseline:.2f}%  |  Δ = {diff:.2f}%")
 
     if args.debug:
-        print("\n--- Debug: Alpha Vantage ---")
-        print(json.dumps(res.get("debug_alpha"), default=str))
+        print("\n--- Debug: Yahoo surprises ---")
+        dbg_surp = res['debug_surprises']
+        if dbg_surp:
+            if "surprise%_raw_newest_first" in dbg_surp:
+                print("surprise%_raw_newest_first :", dbg_surp["surprise%_raw_newest_first"])
+            if "surprise%_winsor_newest_first" in dbg_surp:
+                print("surprise%_winsor_newest_first :", dbg_surp["surprise%_winsor_newest_first"])
+            print("quarters_used :", dbg_surp.get("quarters_used"))
+
         print("\n--- Debug: Yahoo EPS path ---")
-        print("pairs_used(year,eps):", res.get("pairs_used"))
-        print("yoy_list%:", res.get("yoy_list_percent"))
-        print(json.dumps(res.get("debug_yahoo"), default=str))
+        dbg_eps = res['debug_eps_path']
+        print("pairs_used(year,eps):", res['pairs_used'] if res['pairs_used'] else None)
+        print("yoy_list%:", res['yoy_list_percent'])
+        if dbg_eps:
+            for k, v in dbg_eps.items():
+                if k not in ("pairs_used",):
+                    print(k, ":", v)
+        print("revisions(+1y preferred):", res['revisions'])
 
 
-if __name__ == "__main__":  # pragma: no cover - CLI entry
-    cli_main()
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print("Fatal error:", e, file=sys.stderr)
+        sys.exit(2)
