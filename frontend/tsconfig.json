@@ -10,7 +10,11 @@
     "isolatedModules": true,
     "noEmit": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "types": ["node"]
+    "types": ["node", "vite/client"]
   },
-  "include": ["src", "env.d.ts"]
+  "include": ["src", "env.d.ts"],
+  "exclude": ["node_modules"] ,
+  "vueCompilerOptions": {
+    "globalTypesPath": "./src/volar.d.ts"
+  }
 }

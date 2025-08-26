@@ -14,3 +14,8 @@ ignore-tree-and-content:
 ignore-content:
   - "README.md"
   - "LICENSE"
+  - "package.json"
+  - "package-lock.json"
+  - "go.mod"
+  - "go.sum"
+

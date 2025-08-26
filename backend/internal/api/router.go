@@ -1,6 +1,9 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,6 +11,7 @@ import (
 
 	"stockchallenge/backend/internal/db"
 	"stockchallenge/backend/internal/ingest"
+	"stockchallenge/backend/internal/portfolio"
 	"stockchallenge/backend/internal/rec"
 
 	"github.com/gin-gonic/gin"
@@ -15,23 +19,27 @@ import (
 )
 
 type RouterDeps struct {
-	DB          db.DBTX
-	Ingest      *ingest.Service
-	Recommender *rec.Service
-	Log         *zap.SugaredLogger
+	DB              db.DBTX
+	Ingest          *ingest.Service
+	Recommender     *rec.Service
+	Portfolio       portfolio.PortfolioService
+	Log             *zap.SugaredLogger
+	FundamentalsAPI string
 }
 
-func NewRouter(db db.DBTX, ing *ingest.Service, recommender *rec.Service, log *zap.SugaredLogger) http.Handler {
+func NewRouter(db db.DBTX, ing *ingest.Service, recommender *rec.Service, portSvc portfolio.PortfolioService, log *zap.SugaredLogger, fundamentalsAPI string) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(corsMiddleware())
 
 	deps := &RouterDeps{
-		DB:          db,
-		Ingest:      ing,
-		Recommender: recommender,
-		Log:         log,
+		DB:              db,
+		Ingest:          ing,
+		Recommender:     recommender,
+		Portfolio:       portSvc,
+		Log:             log,
+		FundamentalsAPI: fundamentalsAPI,
 	}
 
 	r.GET("/healthz", func(c *gin.Context) {
@@ -44,14 +52,71 @@ func NewRouter(db db.DBTX, ing *ingest.Service, recommender *rec.Service, log *z
 		api.GET("/stocks/search", deps.searchStocks)
 		api.GET("/stocks/sort", deps.sortStocks)
 		api.GET("/stocks/:ticker", deps.getStock)
+		api.GET("/quotes/:ticker", deps.getQuote)
 		api.GET("/recommendations", deps.getRecommendations)
 		api.POST("/admin/ingest", deps.runIngest)
+		api.POST("/admin/fundamentals/refresh", deps.refreshFundamentals)
+		api.GET("/watchlist", deps.getWatchlist)
+		api.POST("/watchlist", deps.addToWatchlist)
+		api.DELETE("/watchlist/:ticker", deps.removeFromWatchlist)
+		api.POST("/portfolio/upload", deps.uploadPortfolio)
+		api.GET("/portfolio", deps.getPortfolio)
 	}
 
 	return r
 }
 
+func (h *RouterDeps) uploadPortfolio(c *gin.Context) {
+	file, _, err := c.Request.FormFile("image")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+		return
+	}
+	defer file.Close()
+
+	imageData, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read image"})
+		return
+	}
+
+	// Hardcoded user ID for now
+	userID := "a4f68b5c-5a4f-4698-852d-732b8e4b2e3c"
+
+	portfolioData, err := h.Portfolio.ExtractAndSavePortfolio(c.Request.Context(), userID, imageData)
+	if err != nil {
+		h.Log.Warnf("portfolio extraction failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to extract portfolio"})
+		return
+	}
+
+	c.JSON(http.StatusOK, portfolioData)
+}
+
+func (h *RouterDeps) getPortfolio(c *gin.Context) {
+	// Hardcoded user ID for now
+	userID := "a4f68b5c-5a4f-4698-852d-732b8e4b2e3c"
+
+	rows, err := h.DB.Query(c, `SELECT ticker, position, average_price FROM portfolio WHERE user_id = $1 ORDER BY ticker`, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
+	defer rows.Close()
+
+	items := make([]gin.H, 0, 64)
+	for rows.Next() {
+		var ticker string
+		var position, averagePrice float64
+		if err := rows.Scan(&ticker, &position, &averagePrice); err == nil {
+			items = append(items, gin.H{"ticker": ticker, "position": position, "average_price": averagePrice})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
 func (h *RouterDeps) listStocks(c *gin.Context) {
+	enrich := strings.ToLower(strings.TrimSpace(c.DefaultQuery("enrich", "false"))) == "true"
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	if page < 1 {
@@ -91,7 +156,7 @@ LIMIT $1 OFFSET $2
 			h.Log.Warnf("scan error: %v", err)
 			continue
 		}
-		items = append(items, gin.H{
+		m := gin.H{
 			"id":                    id,
 			"ticker":                ticker,
 			"company":               company,
@@ -105,7 +170,33 @@ LIMIT $1 OFFSET $2
 			"price_target_delta":    priceDelta,
 			"created_at":            createdAt,
 			"updated_at":            updatedAt,
-		})
+		}
+		if enrich && h.Recommender != nil {
+			// Use context with timeout for enrichment to avoid blocking list requests
+			enrichCtx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+			defer cancel()
+			
+			cp, up, eps, growth, iv, iv2 := h.Recommender.EnrichTicker(enrichCtx, ticker, targetTo)
+			if cp != nil {
+				m["current_price"] = *cp
+			}
+			if up != nil {
+				m["percent_upside"] = *up
+			}
+			if eps != nil {
+				m["eps"] = *eps
+			}
+			if growth != nil {
+				m["growth"] = *growth
+			}
+			if iv != nil {
+				m["intrinsic_value"] = *iv
+			}
+			if iv2 != nil {
+				m["intrinsic_value_2"] = *iv2
+			}
+		}
+		items = append(items, m)
 	}
 
 	// Count
@@ -140,6 +231,19 @@ FROM stocks WHERE ticker = $1
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	// Fire-and-forget refresh for this ticker (quotes always; fundamentals if stale)
+	// Only refresh if not in bulk/list mode to avoid blocking requests
+	if strings.TrimSpace(h.FundamentalsAPI) != "" {
+		h.refreshTickerAsync(ticker)
+	}
+	// Optional enrichment (current price, percent upside, eps, intrinsic)
+	var currPrice, pctUpside, eps, growth, intrinsic, intrinsic2 *float64
+	if h.Recommender != nil {
+		// Individual stock details can have a longer timeout than bulk list operations
+		enrichCtx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		currPrice, pctUpside, eps, growth, intrinsic, intrinsic2 = h.Recommender.EnrichTicker(enrichCtx, ticker, targetTo)
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"id":                    id,
 		"ticker":                ticker,
@@ -152,12 +256,84 @@ FROM stocks WHERE ticker = $1
 		"target_to":             targetTo,
 		"last_rating_change_at": lastChange,
 		"price_target_delta":    priceDelta,
+		"current_price":         currPrice,
+		"percent_upside":        pctUpside,
+		"eps":                   eps,
+		"growth":                growth,
+		"intrinsic_value":       intrinsic,
+		"intrinsic_value_2":     intrinsic2,
 		"created_at":            createdAt,
 		"updated_at":            updatedAt,
 	})
 }
 
+// getQuote returns just the current price for any ticker (even if not in stocks table)
+func (h *RouterDeps) getQuote(c *gin.Context) {
+	ticker := c.Param("ticker")
+	if ticker == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ticker required"})
+		return
+	}
+	
+	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	
+	// Try to get price using the recommender service
+	if h.Recommender != nil {
+		if price, _, _, _, _, _ := h.Recommender.EnrichTicker(c, ticker, nil); price != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"ticker": ticker,
+				"current_price": *price,
+			})
+			return
+		}
+	}
+	
+	c.JSON(http.StatusNotFound, gin.H{"error": "price not available"})
+}
+
+// refreshTickerAsync triggers on-demand updates for the requested ticker using the Fundamentals API.
+// Quotes are refreshed unconditionally. Fundamentals refresh is only attempted if stale (> ~30 days) or missing.
+func (h *RouterDeps) refreshTickerAsync(ticker string) {
+    go func(t string) {
+        // Quotes update: only refresh if last as_of is older than ~6 hours
+        const minAge = 6 * time.Hour
+        shouldUpdate := true
+        if h.DB != nil {
+            ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+            defer cancel()
+            var asof time.Time
+            if err := h.DB.QueryRow(ctx, `SELECT as_of FROM quotes_cache WHERE symbol = $1`, t).Scan(&asof); err == nil {
+                if time.Since(asof) < minAge {
+                    shouldUpdate = false
+                }
+            }
+        }
+        if shouldUpdate {
+            bodyQ, _ := json.Marshal(gin.H{"symbols": []string{t}})
+            _, _ = http.Post(strings.TrimRight(h.FundamentalsAPI, "/")+"/api/update/quotes", "application/json", strings.NewReader(string(bodyQ)))
+        }
+
+        // Fundamentals: check staleness (~30 days) then refresh
+        const maxAge = 30 * 24 * time.Hour
+        ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+        defer cancel()
+		var updatedAt time.Time
+		err := h.DB.QueryRow(ctx, `SELECT updated_at FROM fundamentals WHERE ticker = $1`, t).Scan(&updatedAt)
+		need := false
+		if err != nil {
+			need = true
+		} else if time.Since(updatedAt) > maxAge {
+			need = true
+		}
+		if need {
+			bodyF, _ := json.Marshal(gin.H{"symbols": []string{t}, "use_final_metric": true})
+			_, _ = http.Post(strings.TrimRight(h.FundamentalsAPI, "/")+"/api/update/fundamentals", "application/json", strings.NewReader(string(bodyF)))
+		}
+	}(strings.ToUpper(strings.TrimSpace(ticker)))
+}
+
 func (h *RouterDeps) searchStocks(c *gin.Context) {
+	enrich := strings.ToLower(strings.TrimSpace(c.DefaultQuery("enrich", "false"))) == "true"
 	query := strings.TrimSpace(c.Query("q"))
 	if query == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "search query 'q' is required"})
@@ -204,7 +380,7 @@ LIMIT $2 OFFSET $3
 			h.Log.Warnf("scan error: %v", err)
 			continue
 		}
-		items = append(items, gin.H{
+		m := gin.H{
 			"id":                    id,
 			"ticker":                ticker,
 			"company":               company,
@@ -218,7 +394,33 @@ LIMIT $2 OFFSET $3
 			"price_target_delta":    priceDelta,
 			"created_at":            createdAt,
 			"updated_at":            updatedAt,
-		})
+		}
+		if enrich && h.Recommender != nil {
+			// Use context with timeout for enrichment to avoid blocking list requests
+			enrichCtx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+			defer cancel()
+			
+			cp, up, eps, growth, iv, iv2 := h.Recommender.EnrichTicker(enrichCtx, ticker, targetTo)
+			if cp != nil {
+				m["current_price"] = *cp
+			}
+			if up != nil {
+				m["percent_upside"] = *up
+			}
+			if eps != nil {
+				m["eps"] = *eps
+			}
+			if growth != nil {
+				m["growth"] = *growth
+			}
+			if iv != nil {
+				m["intrinsic_value"] = *iv
+			}
+			if iv2 != nil {
+				m["intrinsic_value_2"] = *iv2
+			}
+		}
+		items = append(items, m)
 	}
 
 	// Count
@@ -239,11 +441,12 @@ WHERE ticker ILIKE '%' || $1 || '%' OR company ILIKE '%' || $1 || '%'
 }
 
 func (h *RouterDeps) sortStocks(c *gin.Context) {
-    sortField := c.DefaultQuery("field", "ticker")
-    order := strings.ToUpper(c.DefaultQuery("order", "ASC"))
-    if order != "ASC" && order != "DESC" {
-        order = "ASC"
-    }
+	enrich := strings.ToLower(strings.TrimSpace(c.DefaultQuery("enrich", "false"))) == "true"
+	sortField := c.DefaultQuery("field", "ticker")
+	order := strings.ToUpper(c.DefaultQuery("order", "ASC"))
+	if order != "ASC" && order != "DESC" {
+		order = "ASC"
+	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
@@ -255,12 +458,12 @@ func (h *RouterDeps) sortStocks(c *gin.Context) {
 	}
 	offset := (page - 1) * pageSize
 
-    // Whitelist sort fields (include commonly used computed/temporal fields)
-    switch sortField {
-    case "ticker", "company", "brokerage", "action", "rating_from", "rating_to", "target_from", "target_to", "updated_at", "price_target_delta":
-    default:
-        sortField = "ticker"
-    }
+	// Whitelist sort fields (include commonly used computed/temporal fields)
+	switch sortField {
+	case "ticker", "company", "brokerage", "action", "rating_from", "rating_to", "target_from", "target_to", "updated_at", "price_target_delta":
+	default:
+		sortField = "ticker"
+	}
 
 	q := `
 SELECT id, ticker, company, brokerage, action, rating_from, rating_to, target_from, target_to, last_rating_change_at, price_target_delta, created_at, updated_at
@@ -291,7 +494,7 @@ LIMIT $1 OFFSET $2
 			h.Log.Warnf("scan error: %v", err)
 			continue
 		}
-		items = append(items, gin.H{
+		m := gin.H{
 			"id":                    id,
 			"ticker":                ticker,
 			"company":               company,
@@ -305,7 +508,33 @@ LIMIT $1 OFFSET $2
 			"price_target_delta":    priceDelta,
 			"created_at":            createdAt,
 			"updated_at":            updatedAt,
-		})
+		}
+		if enrich && h.Recommender != nil {
+			// Use context with timeout for enrichment to avoid blocking list requests
+			enrichCtx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+			defer cancel()
+			
+			cp, up, eps, growth, iv, iv2 := h.Recommender.EnrichTicker(enrichCtx, ticker, targetTo)
+			if cp != nil {
+				m["current_price"] = *cp
+			}
+			if up != nil {
+				m["percent_upside"] = *up
+			}
+			if eps != nil {
+				m["eps"] = *eps
+			}
+			if growth != nil {
+				m["growth"] = *growth
+			}
+			if iv != nil {
+				m["intrinsic_value"] = *iv
+			}
+			if iv2 != nil {
+				m["intrinsic_value_2"] = *iv2
+			}
+		}
+		items = append(items, m)
 	}
 
 	// Count
@@ -327,13 +556,16 @@ SELECT count(*) FROM stocks
 }
 
 func (h *RouterDeps) getRecommendations(c *gin.Context) {
-	top, err := h.Recommender.TopN(c, 5)
-	if err != nil {
-		h.Log.Warnf("recommendation error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to compute"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"items": top})
+    // Bound recommendation latency to keep UI snappy even if upstreams are slow
+    ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+    defer cancel()
+    top, err := h.Recommender.TopN(ctx, 5)
+    if err != nil {
+        h.Log.Warnf("recommendation error: %v", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to compute"})
+        return
+    }
+    c.JSON(http.StatusOK, gin.H{"items": top})
 }
 
 func (h *RouterDeps) runIngest(c *gin.Context) {
@@ -343,6 +575,48 @@ func (h *RouterDeps) runIngest(c *gin.Context) {
 		}
 	}()
 	c.JSON(http.StatusAccepted, gin.H{"status": "ingest started"})
+}
+
+// refreshFundamentals proxies a refresh request to the external Fundamentals API service
+// configured via FUNDAMENTALS_API_BASE. Expects JSON body: {"symbols": ["NVDA","AAPL"], "use_final_metric": false}
+func (h *RouterDeps) refreshFundamentals(c *gin.Context) {
+	if strings.TrimSpace(h.FundamentalsAPI) == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "fundamentals API not configured"})
+		return
+	}
+	// Accept both JSON and query param formats
+	var body struct {
+		Symbols        []string `json:"symbols"`
+		UseFinalMetric bool     `json:"use_final_metric"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		// fall back to query param
+		syms := c.Query("symbols")
+		if syms == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "symbols required"})
+			return
+		}
+		parts := strings.Split(syms, ",")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		body.Symbols = parts
+		body.UseFinalMetric = c.DefaultQuery("use_final_metric", "false") == "true"
+	}
+	// Build request to Fundamentals API
+	reqBody, _ := json.Marshal(gin.H{"symbols": body.Symbols, "use_final_metric": body.UseFinalMetric})
+	resp, err := http.Post(strings.TrimRight(h.FundamentalsAPI, "/")+"/api/update/fundamentals", "application/json", strings.NewReader(string(reqBody)))
+	if err != nil {
+		h.Log.Warnf("fundamentals api error: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "upstream error"})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "upstream status", "status": resp.StatusCode})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"status": "refresh requested", "symbols": body.Symbols})
 }
 
 func corsMiddleware() gin.HandlerFunc {
@@ -356,4 +630,55 @@ func corsMiddleware() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// getWatchlist returns all tickers from the watchlist table.
+func (h *RouterDeps) getWatchlist(c *gin.Context) {
+	rows, err := h.DB.Query(c, `SELECT ticker, notes, added_at FROM watchlist ORDER BY added_at DESC`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
+	defer rows.Close()
+	items := make([]gin.H, 0, 64)
+	for rows.Next() {
+		var t, notes *string
+		var added time.Time
+		if err := rows.Scan(&t, &notes, &added); err == nil {
+			items = append(items, gin.H{"ticker": t, "notes": notes, "added_at": added})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+// addToWatchlist upserts a single ticker.
+func (h *RouterDeps) addToWatchlist(c *gin.Context) {
+	var body struct {
+		Ticker string  `json:"ticker"`
+		Notes  *string `json:"notes"`
+	}
+	if err := c.BindJSON(&body); err != nil || strings.TrimSpace(body.Ticker) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ticker required"})
+		return
+	}
+	t := strings.ToUpper(strings.TrimSpace(body.Ticker))
+	if _, err := h.DB.Exec(c, `UPSERT INTO watchlist (ticker, notes, added_at) VALUES ($1, $2, now())`, t, body.Notes); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "upsert failed"})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"ticker": t, "status": "ok"})
+}
+
+// removeFromWatchlist deletes a ticker.
+func (h *RouterDeps) removeFromWatchlist(c *gin.Context) {
+	t := strings.ToUpper(strings.TrimSpace(c.Param("ticker")))
+	if t == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ticker required"})
+		return
+	}
+	if _, err := h.DB.Exec(c, `DELETE FROM watchlist WHERE ticker = $1`, t); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ticker": t, "status": "deleted"})
 }

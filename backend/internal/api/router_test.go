@@ -2,10 +2,12 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"stockchallenge/backend/internal/ingest"
+	"stockchallenge/backend/internal/portfolio"
 	"stockchallenge/backend/internal/rec"
 	"testing"
 	"time"
@@ -24,6 +26,13 @@ func (m *mockClock) Now() time.Time {
 	return m.now
 }
 
+// Mock portfolio service for testing
+type mockPortfolioService struct{}
+
+func (m *mockPortfolioService) ExtractAndSavePortfolio(ctx context.Context, userID string, imageData []byte) (*portfolio.PositionsOut, error) {
+	return &portfolio.PositionsOut{}, nil
+}
+
 func setupMockRouter(t *testing.T) (*gin.Engine, pgxmock.PgxPoolIface) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -35,7 +44,11 @@ func setupMockRouter(t *testing.T) (*gin.Engine, pgxmock.PgxPoolIface) {
 
 	ingestSvc := ingest.NewService("", "", mock, log)
 	recSvc := rec.NewService(mock)
-	router := NewRouter(mock, ingestSvc, recSvc, log)
+
+	// Create a mock portfolio service
+	portSvc := &mockPortfolioService{}
+
+	router := NewRouter(mock, ingestSvc, recSvc, portSvc, log, "")
 
 	return router.(*gin.Engine), mock
 }
