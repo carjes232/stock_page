@@ -7,6 +7,7 @@ import psycopg
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import datetime as dt
 
 from eps_metric_free import compute_metrics, yahoo_price
 
@@ -100,10 +101,42 @@ def update_quotes(req: UpdateQuotesRequest):
     updated = 0
     errors = 0
     failed_symbols = []
+    # Skip refreshing quotes that are fresh enough
+    min_age_env = os.getenv("QUOTES_MIN_REFRESH_AGE", "6h").strip().lower()
+    # simple duration parse: supports s/m/h/d (same as scheduler)
+    def parse_duration(s: str) -> int:
+        units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        if s and s[-1] in units:
+            return int(float(s[:-1]) * units[s[-1]])
+        return int(float(s))
+    min_age_secs = parse_duration(min_age_env)
     with get_db() as conn:
         for sym in syms:
             sym = sym.strip().upper()
             try:
+                # Check cache freshness first
+                stale_enough = True
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT as_of FROM quotes_cache WHERE symbol = %s", (sym,))
+                        row = cur.fetchone()
+                        if row and row[0]:
+                            as_of: dt.datetime = row[0]
+                            now_utc = dt.datetime.now(dt.timezone.utc)
+                            # Ensure both datetimes are timezone-aware before diff
+                            if as_of.tzinfo is None:
+                                as_of = as_of.replace(tzinfo=dt.timezone.utc)
+                            age = now_utc - as_of
+                            if age.total_seconds() < min_age_secs:
+                                stale_enough = False
+                except Exception:
+                    # On any DB error, fall back to updating to be safe
+                    stale_enough = True
+
+                if not stale_enough:
+                    # Skip refresh; keep existing cached price
+                    continue
+
                 p = yahoo_price(sym)
                 if not isinstance(p, (int, float)) or p <= 0:
                     failed_symbols.append(sym)

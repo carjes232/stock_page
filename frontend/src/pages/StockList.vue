@@ -36,6 +36,17 @@
         >
           My Portfolio
         </button>
+        <button
+          @click="activeTab = 'demo'"
+          :class="[
+            'py-4 px-1 border-b-2 font-medium text-sm',
+            activeTab === 'demo' 
+              ? 'border-brand-500 text-brand-600' 
+              : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+          ]"
+        >
+          My Portfolio Demo
+        </button>
       </nav>
     </div>
 
@@ -76,249 +87,141 @@
     </div>
 
     <div v-else-if="activeTab === 'watchlist'">
-      <div v-if="watchlistLoading" class="card rounded-xl flex items-center justify-center py-12">
-        <div class="flex items-center text-slate-600">
-          <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-brand-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          <span>Loading watchlist…</span>
-        </div>
-      </div>
-      <div v-else-if="watchlistError" class="card rounded-xl text-danger text-center py-12">
-        {{ watchlistError }}
-      </div>
-      <div v-else-if="watchlistItems.length === 0" class="card rounded-xl text-slate-600 text-center py-12">
-        Your watchlist is empty.
-      </div>
-      <ul v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-        <li
-          v-for="item in watchlistItems"
-          :key="item.ticker"
-          class="card rounded-xl transition-all hover:shadow-lg hover:-translate-y-1 flex flex-col"
-        >
-          <div class="p-5 flex-grow">
-            <div class="flex items-center justify-between mb-3">
-              <div class="text-xl font-bold text-brand-600 hover:text-brand-700">{{ item.ticker }}</div>
-              <button @click="toggleWatchlist(item.ticker)" class="btn-icon">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                </svg>
-              </button>
-            </div>
-            <div class="text-sm text-slate-600 mb-2">
-              Added on {{ formatDate(item.added_at) }}
-            </div>
-          </div>
-        </li>
-      </ul>
+      <WatchlistGrid
+        :items="watchlistItems"
+        :loading="watchlistLoading"
+        :error="watchlistError"
+        @go-detail="goDetail"
+        @toggle-watchlist="toggleWatchlist"
+      />
     </div>
 
     <div v-else-if="activeTab === 'portfolio'">
+      <PortfolioSummary
+        title="Portfolio"
+        :portfolio-items="portfolioStore.portfolioItems"
+        :total-investment="portfolioStore.totalInvestment"
+        :total-pn-l="portfolioStore.totalPnL"
+        :biggest-winner="portfolioStore.biggestWinner"
+        :biggest-loser="portfolioStore.biggestLoser"
+      />
+
       <div class="card rounded-xl p-6 mb-6">
-        <h2 class="text-xl font-bold mb-4">My Investment Portfolio</h2>
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-bold">My Investment Portfolio</h2>
+          <button 
+            v-if="portfolioStore.portfolioItems.length > 0" 
+            @click="portfolioStore.showPortfolioForm = !portfolioStore.showPortfolioForm"
+            class="btn btn-secondary"
+          >
+            {{ portfolioStore.showPortfolioForm ? 'Hide Form' : 'Show Form' }}
+          </button>
+        </div>
         <p class="text-slate-600 mb-4">Track your personal investments and see how they compare to our stock recommendations.</p>
         
-        <!-- Drag and drop upload section -->
-        <div class="mb-6">
-          <h3 class="text-lg font-semibold mb-2">Upload Portfolio Image</h3>
-          <div
-            class="border-2 border-dashed rounded-lg p-8 text-center transition-colors"
-            :class="[
-              isDragOver ? 'border-brand-500 bg-brand-50' : 'border-slate-300',
-              portfolioUploading ? 'opacity-50 pointer-events-none' : ''
-            ]"
-            @dragover.prevent="handleDragOver"
-            @dragenter.prevent="handleDragEnter"
-            @dragleave.prevent="handleDragLeave"
-            @drop.prevent="handleDrop"
-          >
-            <div v-if="portfolioUploading" class="flex items-center justify-center">
-              <svg class="animate-spin h-8 w-8 text-brand-600 mr-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              <span class="text-slate-600">Processing portfolio image...</span>
-            </div>
-            <div v-else>
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-slate-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-              <p class="text-slate-600 mb-2">Drag and drop your portfolio image here, or</p>
-              <input type="file" @change="handleFileSelect" accept="image/*" class="hidden" ref="fileInput" />
-              <button @click="$refs.fileInput?.click()" class="btn">
-                Select Image
-              </button>
-              <p class="text-xs text-slate-500 mt-2">Supports JPG, PNG, and other image formats</p>
-            </div>
-          </div>
-          <div v-if="portfolioUploadError" class="mt-2 text-danger text-sm">
-            {{ portfolioUploadError }}
-          </div>
-        </div>
-        
-        <!-- Manual portfolio entry form -->
-        <div class="border-t border-slate-200 pt-6">
-          <h3 class="text-lg font-semibold mb-4">Or Add Manually</h3>
-          <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Ticker</label>
-              <input 
-                v-model="portfolioEntry.ticker" 
-                type="text" 
-                placeholder="e.g. NVDA" 
-                class="input w-full"
-                @keyup.enter="addPortfolioItem"
-              />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Shares</label>
-              <input 
-                v-model="portfolioEntry.shares" 
-                type="number" 
-                step="any" 
-                placeholder="e.g. 0.0141" 
-                class="input w-full"
-                @keyup.enter="addPortfolioItem"
-              />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Avg. Price</label>
-              <input 
-                v-model="portfolioEntry.avgPrice" 
-                type="number" 
-                step="0.01" 
-                placeholder="e.g. 120.50" 
-                class="input w-full"
-                @keyup.enter="addPortfolioItem"
-              />
-            </div>
-            <div class="flex items-end">
-              <button 
-                @click="addPortfolioItem"
-                class="btn w-full"
-              >
-                Add Investment
-              </button>
-            </div>
-          </div>
+        <div v-show="portfolioStore.showPortfolioForm || portfolioStore.portfolioItems.length === 0">
+          <PortfolioUpload
+            title="Upload Portfolio Image"
+            upload-text="Drag and drop your portfolio image here, or"
+            loading-text="Processing portfolio image..."
+            :is-drag-over="portfolioStore.isDragOver"
+            :portfolio-uploading="portfolioStore.portfolioUploading"
+            :portfolio-upload-error="portfolioStore.portfolioUploadError"
+            @drag-over="portfolioStore.handleDragOver"
+            @drag-enter="portfolioStore.handleDragEnter"
+            @drag-leave="portfolioStore.handleDragLeave"
+            @drop="portfolioStore.handleDrop"
+            @file-select="portfolioStore.handleFileSelect"
+          />
+          
+          <PortfolioForm
+            form-title="Or Add Manually"
+            :button-text="portfolioStore.editingIndex !== null ? 'Update Investment' : 'Add Investment'"
+            :portfolio-entry="portfolioStore.portfolioEntry"
+            @submit="portfolioStore.addPortfolioItem"
+          />
         </div>
       </div>
       
-      <!-- Portfolio items -->
-      <div v-if="portfolioItems.length > 0" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-        <div
-          v-for="(item, index) in portfolioItems"
-          :key="index"
-          class="card rounded-xl transition-all hover:shadow-lg hover:-translate-y-1 flex flex-col"
-        >
-          <div class="p-5 flex-grow">
-            <div class="flex items-center justify-between mb-3">
-              <div class="text-xl font-bold text-brand-600 hover:text-brand-700">{{ item.ticker }}</div>
-              <div class="flex gap-2">
-                <button @click="editPortfolioItem(index)" class="text-slate-400 hover:text-brand-600" title="Edit">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                  </svg>
-                </button>
-                <button @click="removePortfolioItem(index)" class="text-slate-400 hover:text-danger" title="Delete">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div class="text-sm text-slate-600 mb-2">
-              {{ item.shares }} shares @ ${{ item.avgPrice.toFixed(2) }}
-            </div>
-            <div class="text-sm text-slate-600">
-              Investment: ${{ (item.shares * item.avgPrice).toFixed(2) }}
-            </div>
-          </div>
-          <div class="px-5 py-4 bg-slate-50 border-t border-slate-100 text-xs">
-            <div class="flex justify-between items-center mb-1">
-              <span class="text-slate-600">Current Price</span>
-              <div class="font-medium">{{ item.currentPrice ? `${item.currentPrice.toFixed(2)}` : 'Loading...' }}</div>
-            </div>
-            <div class="flex justify-between items-center">
-              <span class="text-slate-600">P&L</span>
-              <div 
-                class="font-medium" 
-                :class="item.pnl && item.pnl >= 0 ? 'text-success' : 'text-danger'"
-              >
-                {{ item.pnl !== undefined ? `${item.pnl.toFixed(2)}` : 'Calculating...' }}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div v-else class="card rounded-xl text-slate-600 text-center py-12">
-        No investments added yet. Start by adding your first investment above.
-      </div>
+      <PortfolioGrid
+        :portfolio-items="portfolioStore.portfolioItems"
+        empty-message="No investments added yet. Start by adding your first investment above."
+        @go-detail="goDetail"
+        @add-more-shares="portfolioStore.addMoreShares"
+        @sell-shares="portfolioStore.sellShares"
+        @edit-item="portfolioStore.editPortfolioItem"
+        @remove-item="portfolioStore.removePortfolioItem"
+      />
     </div>
 
-    <div v-if="loading" class="card rounded-xl flex items-center justify-center py-12">
-      <div class="flex items-center text-slate-600">
-        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-brand-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        <span>Loading…</span>
-      </div>
-    </div>
-    <div v-else-if="error" class="card rounded-xl text-danger text-center py-12">
-      {{ error }}
-    </div>
-    <div v-else-if="items.length === 0" class="card rounded-xl text-slate-600 text-center py-12">
-      No results found
-    </div>
-    <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-      <div
-        v-for="s in items"
-        :key="s.id"
-        class="card rounded-xl transition-all hover:shadow-lg hover:-translate-y-1 flex flex-col"
-      >
-        <div class="p-5 flex-grow" @click="goDetail(s.ticker)">
-          <div class="flex items-center mb-3">
-            <div class="text-xl font-bold text-brand-600 hover:text-brand-700 mr-3">{{ s.ticker }}</div>
-            <span class="badge">{{ s.action }}</span>
-          </div>
-          <div class="text-sm text-slate-700 truncate mb-1" :title="s.company">{{ s.company }}</div>
+    <div v-else-if="activeTab === 'demo'">
+      <PortfolioSummary
+        title="Demo Portfolio"
+        :portfolio-items="portfolioStore.demoPortfolioItems"
+        :total-investment="portfolioStore.demoTotalInvestment"
+        :total-pn-l="portfolioStore.demoPnL"
+        :biggest-winner="portfolioStore.demoBiggestWinner"
+        :biggest-loser="portfolioStore.demoBiggestLoser"
+      />
+
+      <div class="card rounded-xl p-6 mb-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-bold">Demo Portfolio</h2>
+          <button 
+            v-if="portfolioStore.demoPortfolioItems.length > 0" 
+            @click="portfolioStore.showDemoPortfolioForm = !portfolioStore.showDemoPortfolioForm"
+            class="btn btn-secondary"
+          >
+            {{ portfolioStore.showDemoPortfolioForm ? 'Hide Form' : 'Show Form' }}
+          </button>
         </div>
-        <div class="px-5 py-4 bg-slate-50 border-t border-slate-100 text-xs">
-          <div class="flex items-center justify-between mb-2">
-            <div class="flex items-center">
-              <button @click.stop="toggleWatchlist(s.ticker)" class="btn-icon mr-2">
-                <svg v-if="isWatched(s.ticker)" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                </svg>
-                <svg v-else xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.783-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                </svg>
-              </button>
-              <div class="text-xs text-slate-500 truncate" :title="s.brokerage">{{ s.brokerage }}</div>
-            </div>
-            <div class="font-medium text-right">{{ s.rating_from }} → {{ s.rating_to }}</div>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="text-slate-600">Target Δ</span>
-            <div class="font-medium" :class="deltaClass(s.price_target_delta)">
-              {{ money(s.price_target_delta) }}
-            </div>
-          </div>
-          <div v-if="enrichList" class="mt-2 pt-2 border-t border-slate-200">
-            <div class="flex justify-between items-center mb-1">
-              <span class="text-slate-600">IV</span>
-              <div class="font-medium">{{ money(s.intrinsic_value as any) }}</div>
-            </div>
-            <div class="flex justify-between items-center">
-              <span class="text-slate-600">IV (AAA)</span>
-              <div class="font-medium">{{ money(s.intrinsic_value_2 as any) }}</div>
-            </div>
-          </div>
+        <p class="text-slate-600 mb-4">Practice with a demo portfolio to learn how our platform works without using real money.</p>
+        
+        <div v-show="portfolioStore.showDemoPortfolioForm || portfolioStore.demoPortfolioItems.length === 0">
+          <PortfolioUpload
+            title="Upload Demo Portfolio Image"
+            upload-text="Drag and drop your demo portfolio image here, or"
+            loading-text="Processing demo portfolio image..."
+            :is-demo="true"
+            :is-drag-over="portfolioStore.isDragOver"
+            :portfolio-uploading="portfolioStore.portfolioUploading"
+            :portfolio-upload-error="portfolioStore.portfolioUploadError"
+            @drag-over="portfolioStore.handleDragOver"
+            @drag-enter="portfolioStore.handleDragEnter"
+            @drag-leave="portfolioStore.handleDragLeave"
+            @drop="portfolioStore.handleDrop"
+            @file-select="portfolioStore.handleFileSelect"
+          />
+          
+          <PortfolioForm
+            form-title="Or Add Demo Investment Manually"
+            :button-text="portfolioStore.editingDemoIndex !== null ? 'Update Demo Investment' : 'Add Demo Investment'"
+            :portfolio-entry="portfolioStore.portfolioEntry"
+            @submit="portfolioStore.addDemoPortfolioItem"
+          />
         </div>
       </div>
+      
+      <PortfolioGrid
+        :portfolio-items="portfolioStore.demoPortfolioItems"
+        empty-message="No demo investments added yet. Start by adding your first demo investment above."
+        @go-detail="goDetail"
+        @add-more-shares="portfolioStore.addMoreDemoShares"
+        @sell-shares="portfolioStore.sellDemoShares"
+        @edit-item="portfolioStore.editDemoPortfolioItem"
+        @remove-item="portfolioStore.removeDemoPortfolioItem"
+      />
     </div>
+
+    <StockGrid
+      :items="items"
+      :loading="loading"
+      :error="error"
+      :enrich-list="enrichList"
+      :watchlist-items="watchlistItems"
+      @go-detail="goDetail"
+      @toggle-watchlist="toggleWatchlist"
+    />
 
     <div v-if="activeTab === 'all'" class="flex flex-col sm:flex-row items-center justify-between gap-4">
       <div class="text-sm text-slate-600">
@@ -350,9 +253,15 @@
         </button>
       </div>
     </div>
-    <div v-else class="text-sm text-slate-600">
-      Showing {{ items.length }} watchlisted items
-    </div>
+
+    <AddSharesModal
+      :show="portfolioStore.addSharesModal"
+      :current-item="currentPortfolioItem"
+      v-model:share-amount="portfolioStore.addSharesAmount"
+      :is-sell="portfolioStore.isSellMode"
+      @close="portfolioStore.addSharesModal = false"
+      @confirm="portfolioStore.confirmAddShares"
+    />
   </section>
 </template>
 
@@ -360,11 +269,21 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useStockStore } from '../stores/stock';
+import { usePortfolioStore } from '../stores/portfolio';
 import { storeToRefs } from 'pinia';
-import axios from 'axios';
+
+// Components
+import PortfolioSummary from '../components/PortfolioSummary.vue';
+import PortfolioUpload from '../components/PortfolioUpload.vue';
+import PortfolioForm from '../components/PortfolioForm.vue';
+import PortfolioGrid from '../components/PortfolioGrid.vue';
+import AddSharesModal from '../components/AddSharesModal.vue';
+import StockGrid from '../components/StockGrid.vue';
+import WatchlistGrid from '../components/WatchlistGrid.vue';
 
 const router = useRouter();
 const stockStore = useStockStore();
+const portfolioStore = usePortfolioStore();
 const { stocks, watchlist } = storeToRefs(stockStore);
 
 const activeTab = ref('all');
@@ -375,24 +294,7 @@ const page = ref(1);
 const pageSize = ref(20);
 const enrichList = ref(false);
 
-// Portfolio state
-const portfolioEntry = ref({
-  ticker: '',
-  shares: 0,
-  avgPrice: 0
-});
-
-const portfolioItems = ref<any[]>([]);
-
-// Drag & drop state
-const isDragOver = ref(false);
-const portfolioUploading = ref(false);
-const portfolioUploadError = ref<string | null>(null);
-const fileInput = ref<HTMLInputElement | null>(null);
-
-const items = computed(() => {
-  return stocks.value.items;
-});
+const items = computed(() => stocks.value.items);
 const total = computed(() => stocks.value.total);
 const loading = computed(() => stocks.value.loading);
 const error = computed(() => stocks.value.error);
@@ -402,7 +304,6 @@ const watchlistLoading = computed(() => watchlist.value.loading);
 const watchlistError = computed(() => watchlist.value.error);
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
-
 const startIndex = computed(() => (page.value - 1) * pageSize.value + 1);
 const endIndex = computed(() => Math.min(page.value * pageSize.value, total.value));
 
@@ -423,34 +324,22 @@ const visiblePages = computed(() => {
   return pages;
 });
 
-function isWatched(ticker: string): boolean {
-  return watchlistItems.value.some(i => i.ticker === ticker);
-}
+// Current item for add shares modal
+const currentPortfolioItem = computed(() => {
+  if (portfolioStore.addSharesIndex !== null) {
+    const items = portfolioStore.isDemoModal ? portfolioStore.demoPortfolioItems : portfolioStore.portfolioItems;
+    return items[portfolioStore.addSharesIndex] || null;
+  }
+  return null;
+});
 
 async function toggleWatchlist(ticker: string) {
-  if (isWatched(ticker)) {
+  const isWatched = watchlistItems.value.some(i => i.ticker === ticker);
+  if (isWatched) {
     await stockStore.removeFromWatchlist(ticker);
   } else {
     await stockStore.addToWatchlist(ticker);
   }
-}
-
-function money(v?: number | null): string {
-  if (v == null) return '-';
-  return `${v.toFixed(2)}`;
-}
-
-function deltaClass(v?: number | null) {
-  if (v == null) return '';
-  return v >= 0 ? 'text-success' : 'text-danger';
-}
-
-function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric'
-  });
 }
 
 async function load() {
@@ -514,17 +403,9 @@ onMounted(async () => {
     stockStore.fetchWatchlist(),
   ]);
   
-  // Load portfolio from localStorage
-  const savedPortfolio = localStorage.getItem('stockPortfolio');
-  if (savedPortfolio) {
-    try {
-      portfolioItems.value = JSON.parse(savedPortfolio);
-      // Update portfolio prices
-      updatePortfolioPrices();
-    } catch (e) {
-      console.error('Failed to load portfolio', e);
-    }
-  }
+  // Load portfolios from localStorage
+  portfolioStore.loadPortfolio();
+  portfolioStore.loadDemoPortfolio();
 });
 
 // Watch for changes in the watchlist and reload if we're on the watchlist tab
@@ -534,191 +415,6 @@ watch(watchlistItems, () => {
     load();
   }
 });
-
-// Portfolio methods
-function addPortfolioItem() {
-  if (!portfolioEntry.value.ticker || portfolioEntry.value.shares <= 0 || portfolioEntry.value.avgPrice <= 0) {
-    return;
-  }
-  
-  const newItem = {
-    ticker: portfolioEntry.value.ticker.toUpperCase(),
-    shares: parseFloat(portfolioEntry.value.shares.toString()),
-    avgPrice: parseFloat(portfolioEntry.value.avgPrice.toString()),
-    currentPrice: null,
-    pnl: undefined
-  };
-  
-  portfolioItems.value.push(newItem);
-  savePortfolio();
-  
-  // Reset form
-  portfolioEntry.value = {
-    ticker: '',
-    shares: 0,
-    avgPrice: 0
-  };
-  
-  // Update prices
-  updatePortfolioPrices();
-}
-
-function editPortfolioItem(index: number) {
-  const item = portfolioItems.value[index];
-  // Populate the form with the current item's data
-  portfolioEntry.value = {
-    ticker: item.ticker,
-    shares: item.shares,
-    avgPrice: item.avgPrice
-  };
-  
-  // Remove the item so it can be re-added with updated values
-  removePortfolioItem(index);
-  
-  // Scroll to the form
-  const formElement = document.querySelector('.border-t.border-slate-200.pt-6');
-  if (formElement) {
-    formElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-}
-
-function removePortfolioItem(index: number) {
-  portfolioItems.value.splice(index, 1);
-  savePortfolio();
-}
-
-function savePortfolio() {
-  localStorage.setItem('stockPortfolio', JSON.stringify(portfolioItems.value));
-}
-
-async function updatePortfolioPrices() {
-  // Update prices for all portfolio items
-  for (const item of portfolioItems.value) {
-    try {
-      const response = await axios.get(`/api/stocks/${item.ticker}`);
-      const data = response.data;
-      if (data.current_price) {
-        item.currentPrice = data.current_price;
-        item.pnl = (data.current_price - item.avgPrice) * item.shares;
-      } else {
-        // Set error state when price is not available
-        item.currentPrice = null;
-        item.pnl = undefined;
-        console.warn(`Price data not available for ${item.ticker}`);
-      }
-    } catch (e) {
-      console.error(`Failed to fetch price for ${item.ticker}`, e);
-      // Set error state on request failure
-      item.currentPrice = null;
-      item.pnl = undefined;
-    }
-  }
-  
-  savePortfolio();
-}
-
-// Drag & drop handlers
-function handleDragOver(event: DragEvent) {
-  event.preventDefault();
-  isDragOver.value = true;
-}
-
-function handleDragEnter(event: DragEvent) {
-  event.preventDefault();
-  isDragOver.value = true;
-}
-
-function handleDragLeave(event: DragEvent) {
-  event.preventDefault();
-  // Only set to false if we're leaving the drop zone entirely
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-  const x = event.clientX;
-  const y = event.clientY;
-  
-  if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-    isDragOver.value = false;
-  }
-}
-
-function handleDrop(event: DragEvent) {
-  event.preventDefault();
-  isDragOver.value = false;
-  
-  const files = event.dataTransfer?.files;
-  if (files && files.length > 0) {
-    const file = files[0];
-    if (file.type.startsWith('image/')) {
-      uploadPortfolioImage(file);
-    } else {
-      portfolioUploadError.value = 'Please select an image file (JPG, PNG, etc.)';
-    }
-  }
-}
-
-function handleFileSelect(event: Event) {
-  const target = event.target as HTMLInputElement;
-  const file = target.files?.[0];
-  if (file) {
-    uploadPortfolioImage(file);
-  }
-}
-
-async function uploadPortfolioImage(file: File) {
-  portfolioUploading.value = true;
-  portfolioUploadError.value = null;
-
-  const formData = new FormData();
-  formData.append('image', file);
-
-  try {
-    const response = await axios.post('/api/portfolio/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-
-    if (response.status === 200) {
-      // Fetch updated portfolio data from backend
-      await fetchBackendPortfolio();
-    }
-  } catch (error: any) {
-    console.error('Portfolio upload failed:', error);
-    portfolioUploadError.value = error.response?.data?.error || 'Failed to upload portfolio image. Please try again.';
-  } finally {
-    portfolioUploading.value = false;
-    // Reset file input
-    if (fileInput.value) {
-      fileInput.value.value = '';
-    }
-  }
-}
-
-async function fetchBackendPortfolio() {
-  try {
-    const response = await axios.get('/api/portfolio');
-    const backendPortfolio = response.data.items || [];
-    
-    // Merge backend portfolio with local portfolio, avoiding duplicates
-    const existingTickers = new Set(portfolioItems.value.map(item => item.ticker));
-    
-    for (const backendItem of backendPortfolio) {
-      if (!existingTickers.has(backendItem.ticker)) {
-        portfolioItems.value.push({
-          ticker: backendItem.ticker,
-          shares: backendItem.position,
-          avgPrice: backendItem.average_price,
-          currentPrice: null,
-          pnl: undefined
-        });
-      }
-    }
-    
-    savePortfolio();
-    updatePortfolioPrices();
-  } catch (error) {
-    console.error('Failed to fetch backend portfolio:', error);
-  }
-}
 </script>
 
 <style scoped>

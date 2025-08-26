@@ -57,18 +57,23 @@ func main() {
 		sugar.Fatalf("portfolio service error: %v", err)
 	}
 	recommender := rec.NewService(pool)
+
+	// Configure services based on settings
+	if !cfg.DisableGrahamProvider {
+		// For now, we rely on the Python Fundamentals API to populate quotes_cache and
+		// fundamentals in the database. The Go service reads from cache.
+	}
+	
+	// Wire FRED provider for corporate bond yield data
 	fredClient := marketdata.NewFredClient()
 	recommender.SetCorporateBondYieldProvider(fredClient)
-    // We now rely on the Python Fundamentals API to populate quotes_cache and
-    // fundamentals in the database. The Go service reads from cache and does
-    // not call external price or fundamentals providers directly.
+
 	// Enable quote cache and top-K enrichment
 	recommender.EnableQuoteCache(cfg.QuotesTTL)
-    recommender.EnableGrahamValuation(cfg.FundamentalsTTL)
-    recommender.SetTopK(cfg.PriceTopK)
+	recommender.EnableGrahamValuation(cfg.FundamentalsTTL)
+	recommender.SetTopK(cfg.PriceTopK)
 
-
-    // Optionally run ingestion on start
+	// Optionally run ingestion on start
 	if cfg.IngestOnStart {
 		go func() {
 			if err := ing.RunOnce(context.Background()); err != nil {
@@ -77,39 +82,39 @@ func main() {
 		}()
 	}
 
-    // Start ingestion cron
-    cronStop := make(chan struct{})
-    go ingest.StartCron(ing, cfg.IngestInterval, sugar, cronStop)
+	// Start ingestion cron
+	cronStop := make(chan struct{})
+	go ingest.StartCron(ing, cfg.IngestInterval, sugar, cronStop)
 
-    // Start daily warm cron to prefetch quotes and fundamentals for top-K
-    warmStop := make(chan struct{})
-    go func() {
-        t := time.NewTicker(cfg.PriceWarmInterval)
-        defer t.Stop()
-        for {
-            // Do an initial warm immediately at startup
-            ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-            _ = recommender.WarmCachesForTopK(ctx)
-            cancel()
-            break
-        }
-        for {
-            select {
-            case <-t.C:
-                ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-                if err := recommender.WarmCachesForTopK(ctx); err != nil {
-                    sugar.Warnf("warm caches error: %v", err)
-                }
-                cancel()
-            case <-warmStop:
-                sugar.Infof("warm cron stopped")
-                return
-            }
-        }
-    }()
+	// Start daily warm cron to prefetch quotes and fundamentals for top-K
+	warmStop := make(chan struct{})
+	go func() {
+		t := time.NewTicker(cfg.PriceWarmInterval)
+		defer t.Stop()
+		for {
+			// Do an initial warm immediately at startup
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			_ = recommender.WarmCachesForTopK(ctx)
+			cancel()
+			break
+		}
+		for {
+			select {
+			case <-t.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				if err := recommender.WarmCachesForTopK(ctx); err != nil {
+					sugar.Warnf("warm caches error: %v", err)
+				}
+				cancel()
+			case <-warmStop:
+				sugar.Infof("warm cron stopped")
+				return
+			}
+		}
+	}()
 
 	// HTTP router
-    router := api.NewRouter(pool, ing, recommender, portSvc, sugar, cfg.FundamentalsAPIBase)
+	router := api.NewRouter(pool, ing, recommender, portSvc, sugar, cfg.FundamentalsAPIBase)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.BackendPort),
@@ -123,8 +128,8 @@ func main() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt)
 		<-c
-        close(cronStop)
-        close(warmStop)
+		close(cronStop)
+		close(warmStop)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)

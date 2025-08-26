@@ -49,6 +49,8 @@ def main():
     # Always use the final metric as it's more comprehensive
     use_final = True
     price_every = parse_duration(getenv("PRICE_UPDATE_INTERVAL", "24h"))
+    # Only refresh quotes that are older than this age
+    min_quote_age = parse_duration(getenv("QUOTES_MIN_REFRESH_AGE", "6h"))
     fund_every = parse_duration(getenv("FUNDAMENTALS_UPDATE_INTERVAL", "720h"))
     # recentN is ignored now; we refresh only watchlist for scheduled jobs
     _recentN = int(getenv("TOP_RECENT_COUNT", "50"))
@@ -78,8 +80,30 @@ def main():
                 next_price = now + price_every
             else:
                 try:
-                    print(f"[scheduler] updating quotes for {len(target)} symbols", flush=True)
-                    r = requests.post(api + "/api/update/quotes", json={"symbols": target}, timeout=45)
+                    # Filter to only stale symbols by checking quotes_cache.as_of
+                    stale: List[str] = []
+                    try:
+                        with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+                            now = time.time()
+                            for t in target:
+                                cur.execute("SELECT as_of FROM quotes_cache WHERE symbol = %s", (t,))
+                                row = cur.fetchone()
+                                if not row or not row[0]:
+                                    stale.append(t)
+                                else:
+                                    as_of = row[0]
+                                    age = now - as_of.timestamp()
+                                    if age >= min_quote_age:
+                                        stale.append(t)
+                    except Exception:
+                        # If any issue checking freshness, fall back to all symbols
+                        stale = list(target)
+
+                    if not stale:
+                        print(f"[scheduler] quotes: all up-to-date (< {min_quote_age}s)", flush=True)
+                    else:
+                        print(f"[scheduler] updating quotes for {len(stale)} symbols", flush=True)
+                        r = requests.post(api + "/api/update/quotes", json={"symbols": stale}, timeout=45)
                     print(f"[scheduler] quotes status={r.status_code} body={r.text[:200]}", flush=True)
                     # Log failed symbols if available in response
                     try:

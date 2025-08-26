@@ -14,6 +14,11 @@ import (
 	"google.golang.org/api/option"
 )
 
+// PortfolioService defines the interface for portfolio operations.
+type PortfolioService interface {
+	ExtractAndSavePortfolio(ctx context.Context, userID string, imageData []byte) (*PositionsOut, error)
+}
+
 // PositionsOut schema that matches the required JSON
 type PositionsOut struct {
 	Instruments []string  `json:"INSTRUMENTS"`

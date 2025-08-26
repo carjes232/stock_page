@@ -96,7 +96,7 @@ export const useStockStore = defineStore('stock', {
           query.order = order;
         }
 
-        const { data } = await axios.get(url, { params: query });
+        const { data } = await axios.get(url, { params: query, timeout: enrich ? 15000 : 5000 });
         this.stocks.items = data.items ?? [];
         this.stocks.total = data.total ?? this.stocks.items.length;
       } catch (e: any) {
@@ -109,7 +109,8 @@ export const useStockStore = defineStore('stock', {
       this.recommendations.loading = true;
       this.recommendations.error = null;
       try {
-        const { data } = await axios.get('/api/recommendations');
+        // Bound the wait so UI doesn't spin forever on slow upstreams
+        const { data } = await axios.get('/api/recommendations', { timeout: 5000 });
         this.recommendations.items = data.items ?? [];
       } catch (e: any) {
         this.recommendations.error = e?.message || 'Failed to load';
@@ -121,10 +122,39 @@ export const useStockStore = defineStore('stock', {
       this.detail.loading = true;
       this.detail.error = null;
       try {
+        // First try the stocks endpoint (for stocks with recommendations)
         const { data } = await axios.get(`/api/stocks/${ticker}`);
         this.detail.item = data;
       } catch (e: any) {
-        this.detail.error = e?.message || 'Failed to load';
+        try {
+          // If stocks endpoint fails (e.g., ETFs not in stocks table), try quotes endpoint
+          const quoteResponse = await axios.get(`/api/quotes/${ticker}`);
+          const quoteData = quoteResponse.data;
+          
+          // Transform quote data to match StockItem interface
+          this.detail.item = {
+            id: ticker,
+            ticker: ticker,
+            company: quoteData.name || ticker,
+            brokerage: 'N/A',
+            action: 'N/A',
+            rating_from: 'N/A',
+            rating_to: 'N/A',
+            target_from: null,
+            target_to: null,
+            price_target_delta: null,
+            current_price: quoteData.current_price || null,
+            percent_upside: null,
+            eps: quoteData.eps || null,
+            growth: null,
+            intrinsic_value: null,
+            intrinsic_value_2: null,
+            updated_at: new Date().toISOString()
+          };
+        } catch (quoteError: any) {
+          console.error(`Failed to fetch detail for ${ticker}`, quoteError);
+          this.detail.error = `Stock not found in our database. This could be an ETF or a ticker not covered in our recommendations.`;
+        }
       } finally {
         this.detail.loading = false;
       }

@@ -106,3 +106,4 @@ coverage/
 **/.turbo/
 **/.parcel-cache/
 __pycache__/
+.venv/
